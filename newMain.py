@@ -12,10 +12,14 @@ from enum import Enum
 import copy
 import math
 
+# PyQtGraph Imports
+import numpy as np
+import pyqtgraph
+
 # PySide6 Imports
 from PySide6.QtCore import (
     Signal, QEvent,                                         # Signals & Events
-    QPointF, QRect,                                         # Geometry & Coordinates
+    QPointF, QRect, QRectF,                                 # Geometry & Coordinates
     Qt, QObject, QTimer,                                    # Utilities / Timing / Flags
 )
 from PySide6.QtGui import (
@@ -93,19 +97,22 @@ class Simulation:
                 # Strong Acids
                 "HYDROCHLORIC_ACID": Chemical("HCl (Hydrochloric Acid)", True, True),
                 # Weak Acids
-                "ACETIC_ACID": Chemical("CH₃COOH (Acetic Acid)", True, False, 4.76)
+                "ACETIC_ACID": Chemical("CH₃COOH (Acetic Acid)", True, False, 4.76),
+                "FORMIC_ACID": Chemical("HCOOH (Formic Acid)", True, False, 3.75)
             },
             ChemicalType.BASE: {
                 # Strong Bases
                 "SODIUM_HYDROXIDE": Chemical("NaOH (Sodium Hydroxide)", False, True),
                 # Weak Bases
-                "SODIUM_ACETATE": Chemical("CH₃COONa (Sodium Acetate)", False, False, 9.24)
+                "SODIUM_ACETATE": Chemical("CH₃COONa (Sodium Acetate)", False, False, 9.24),
+                "SODIUM_HYPOCHLORITE": Chemical("NaOCl (Sodium Hypochlorite)", False, False, 6.47)
             },
             ChemicalType.INDICATOR: {
                 # All indicators are weak
-                "METHYL_ORANGE": Chemical("Methyl Orange", True, False, 3.47, QColor(220, 40, 40), QColor(220, 40, 40)),
-                "BROMOTHYMOL_BLUE": Chemical("Bromothymol Blue (BTB)", True, False, 7.0, QColor(240, 220, 0), QColor(240, 220, 0)),
-                "PHENOLPHTHALEIN": Chemical("Phenolphthalein", True, False, 9.3, QColor(0, 0, 0), QColor(255, 20, 147))
+                "METHYL_ORANGE": Chemical("Methyl Orange", True, False, 3.47, QColor(227, 38, 54), QColor(252, 189, 17)),
+                # "METHYL_ORANGE": Chemical("Methyl Orange", True, False, 3.47, QColor(200, 60, 60), QColor(245, 200, 80)),
+                "BROMOTHYMOL_BLUE": Chemical("Bromothymol Blue (BTB)", True, False, 7.0, QColor(235, 215, 60), QColor(40, 120, 220)),
+                "PHENOLPHTHALEIN": Chemical("Phenolphthalein", True, False, 9.3, QColor(255, 255, 255), QColor(230, 80, 170))
             },
         }
         # Users will add/edit/delete from this dictionary
@@ -122,12 +129,185 @@ class Simulation:
     def end(self):
         self.config_data = None
         self.titrant_volume = 0.0
+    def get_equivalence_titrant_volume(self) -> float:
+        # This function is unsafe, only use when config_data exists
+        return self.config_data.analyte.concentration * self.config_data.analyte.volume / self.config_data.titrant.concentration
     def get_max_titrant_volume(self) -> float:
         # Allow twice the volume of equivalence point
-        # This function is unsafe, only use when config_data exists
-        return self.config_data.analyte.concentration * self.config_data.analyte.volume / self.config_data.titrant.concentration * 2
-    def get_mixture_volume(self) -> float: return self.config_data.analyte.volume + self.titrant_volume
+        return self.get_equivalence_titrant_volume() * 2
+    def get_current_mixture_volume(self) -> float: return self.config_data.analyte.volume + self.titrant_volume
+    # =======================================================
+    # Theoretical Background: Finding pH of Acid/Base Mixture
+    # Scenario: a(M) Va(mL) HA + b(M) Vb(mL) B
+    # Reactions:
+    #   HA + H₂O ⇌ A⁻ + H₃O⁺  K=Ka
+    #   B + H₂O ⇌ BH⁺ + OH⁻   K=Kb
+    #   2H₂O ⇌ H₃O⁺ + OH⁻     K=Kw
+    # Variables: [HA], [A⁻], [B], [BH⁺], [H₃O⁺], [OH⁻]
+    # Equations:
+    #   (a) [A⁻] * [H₃O⁺] / [HA] = Ka                (Equivalence of HA)
+    #   (b) [HA] + [A⁻] = a * Va / (Va + Vb) = Ca    (Conservation of Mass)
+    #   (c) [BH⁺] * [OH⁻] / [B] = Kb                 (Equivalence of B)
+    #   (d) [B] + [BH⁺] = b * Va / (Va + Vb) = Cb    (Conservation of Mass)
+    #   (e) [H₃O⁺] * [OH⁻] = Kw                      (Equivalence of Water Self-Ionization)
+    #   (f) [H₃O⁺] - [A⁻] = [OH⁻] - [BH⁺]            (Conservation of Charge)
+    # Solution:
+    #   1. Solve for [A⁻] and [BH⁺] in (a) & (b), (c) & (d)
+    #       [A⁻] = Ca * Ka / (Ka + [H₃O⁺])
+    #       [BH⁺] = Cb * Kb / (Kb + [OH⁻])
+    #   2. Substitute results from 1 and [OH⁻] = Kw / [H₃O⁺] from (e) to (f)
+    #       [H₃O⁺] - Ca * Ka / (Ka + [H₃O⁺]) = Kw / [H₃O⁺] - Cb * Kb / (Kb + Kw / [H₃O⁺])
+    #   3. For x > 0, we define function f:
+    #       f(x) = x - Ca * Ka / (Ka + x) - Kw / x + Cb * Kb / (Kb + Kw / x), with Ca, Cb, Ka, Kb, Kw > 0
+    #       The solution x₀ of f(x) = 0 is x₀ = [H₃O⁺]
+    #       It is additionally guaranteed that 1e-15 < x₀ < 10, due to the fact that initial analyte and titrant concentrations are at most 10M
+    #       For strong acid/bases we take Ka/Kb to its limit to infinity:
+    #           If HA is strong: Ca * Ka / (Ka + x) reduces to Ca
+    #           If B is strong: Cb * Kb / (Kb + Kw / x) reduces to Cb
+    #   4. Define y with relation x = pow(10, -y), so that the solution y₀ of f(pow(10, -y)) = 0 is y₀ = -log(x₀) = -log([H₃O⁺]) = pH
+    #       Since x > 0, y has its domain in all real numbers
+    #       By the Chain Rule, df/dy = df/dx * dx/dy
+    #           df/dx = 1 + Ca * Ka / pow(Ka + x, 2) + Kw / pow(x, 2) + (Cb * Kw / Kb) / pow(x + Kw / Kb, 2)
+    #           dx/dy = -ln(10) * pow(10, -y) = -ln(10) * x
+    #       Due constraints x, Ca, Cb, Ka, Kb, Kw > 0 from 3, it can be said that
+    #           df/dx > 1, dx/dy < 0
+    #       Thus df/dy < 0, meaning f(x=pow(10, -y)) strictly decreases regarding, y meaning it only has one solution, and its derivative NEVER equals 0
+    #       From the range of x₀ from 3, it is guaranteed that -1 < y₀ < 15
+    #       If HA is strong: Ca * Ka / pow(Ka + x, 2) reduces to 0
+    #       If B is strong: (Cb * Kw / Kb) / pow(x + Kw / Kb, 2) reduces to 0
+    #   5. Numeric Solution
+    #       Considering the behavior of f, Safeguarded Newton–Raphson method will be used (Quadratic Convergence)
+    # Indicator: -log([In⁻] / [HIn]) = -log(([In⁻] * [H₃O⁺] / [HIn]) / [H₃O⁺]) = pKa - pH, for pKa of indicator acid form
+    # =======================================================
+    # Safeguarded Newton-Raphson method
+    @staticmethod
+    def _safeguarded_newton_raphson_method(
+        f: Callable[[float], float],
+        dfdx: Callable[[float], float],
+        x_low: float, # Lower Bound
+        x_high: float, # Upper Bound
+        max_iter: int = 50, # Max Iteration
+        tol_x: float = 1e-6, # If x moves smaller than this, early return
+        tol_f: float = 1e-10, # If f is smaller than this, early return
+        min_dfdx: float = 1e-12 # Minimal df/dx for Newton's Method
+    ):
+        f_low = f(x_low)
+        f_high = f(x_high)
+        if f_low * f_high > 0:
+            print("Newton's Method Faild: No Solution within Range")
+            return float("nan")
+        # Initial Guess
+        x = (x_low + x_high) / 2
+        for i in range(max_iter):
+            f_val = f(x)
+            dfdx_val = dfdx(x)
+            # Only apply newton's method if dfdx is bigger than min_dfdx
+            if abs(dfdx_val) > min_dfdx: x_newton = x - f_val / dfdx_val
+            else: x_newton = float("nan")
+            if (
+                not math.isnan(x_newton) and
+                (x_newton > x_low and x_newton < x_high) and
+                abs(x_newton - x) <= 0.5 * (x_high - x_low)
+            ):
+                # Use newton
+                x_new = x_newton
+            else: x_new = 0.5 * (x_low + x_high)
+            
+            f_new = f(x_new)
+            # Update range
+            if f_low * f_new > 0:
+                x_low = x_new
+                f_low = f_new
+            else:
+                x_high = x_new
+                f_high = f_new
 
+            # Early Exit (When i == 0, initial guess matches bisect)
+            if (i != 0 and abs(x_new - x) < tol_x) or abs(f_new) < tol_f: return x_new
+            
+            
+            # Set x to new value
+            x = x_new
+        return x
+    # Returns pH value for given mix
+    @staticmethod
+    def _solve_pH(acid: PureSolution, base: PureSolution) -> float:
+        Ca: float = acid.concentration * acid.volume / (acid.volume + base.volume)
+        Cb: float = base.concentration * base.volume / (acid.volume + base.volume)
+        Ka: float | None = None if not acid.chemical.pK_ else pow(10, -acid.chemical.pK_)
+        Kb: float | None = None if not base.chemical.pK_ else pow(10, -base.chemical.pK_)
+        Kw: float = 1e-14
+
+        def f(y: float) -> float:
+            x = pow(10, -y)
+            A_minus: float = Ca if acid.chemical.is_strong else Ca * Ka / (Ka + x)
+            BH_plus: float = Cb if base.chemical.is_strong else Cb * Kb / (Kb + Kw / x)
+            return x - A_minus - Kw / x + BH_plus
+        def dfdy(y: float) -> float:
+            x = pow(10, -y)
+            dA_minusdy: float = 0 if acid.chemical.is_strong else Ca * Ka / ((Ka + x) * (Ka + x))
+            dBH_plusdy: float = 0 if base.chemical.is_strong else Cb * (Kw / Kb) / ((x + (Kw / Kb)) * (x + (Kw / Kb)))
+            return -math.log1p(10 - 1) * x * (1 + dA_minusdy + Kw / (x * x) + dBH_plusdy)
+        return Simulation._safeguarded_newton_raphson_method(f, dfdy, -1.1, 15.1) # Add 0.1 buffer for extreme values (10M of strong acid/base)
+    def get_pH(self, titrant_volume: float) -> float | None:
+        if not self.config_data: return None
+        if self.config_data.analyte.chemical.is_acid:
+            acid = self.config_data.analyte
+            base = self.config_data.titrant
+            base.volume = titrant_volume
+        else:
+            acid = self.config_data.titrant
+            acid.volume = titrant_volume
+            base = self.config_data.analyte
+        return self._solve_pH(acid, base)
+    def _get_p_In_HIn(self, pH: float, index: int) -> float:
+        # -log([In⁻] / [HIn])
+        indicator = self.config_data.indicators[index]
+        pKa = indicator.pK_ if indicator.is_acid else (14 - indicator.pK_)
+        return pKa - pH
+    def get_current_pH(self) -> float | None: return self.get_pH(self.titrant_volume)
+    # =======================================================
+    # Theoretical Background: Finding Color of Solution by Indicator
+    # To accurately calculate how the color of a solution will change, one should know the full absorbance spectra of the acid and base from of an indicator, daylight, and water
+    # However, such implementation is impractical, thus a scientifically-inaccurate, yet visually acceptable approach is taken
+    # Premise: We assume every light in nature is made out of three wavelengths RGB, and that the absorbance spectra only consists of 3 wavelengths
+    # Scenario: sRGB values (sRa, sGa, sBa) of Acid Color, (sRb, sGb, sBb) of Base Color
+    # Solution:
+    #   All processes are applied equally to each of RGB, so a compact notation of X is used to represent RGB (X := R, G, B)
+    #   Such symmetry also holds for acid and base, thus i represents either a, b (i := a, b)
+    #   1. Normalize sRGB values to values in range 0-1
+    #       nsXi = sXi / 255
+    #   2. Convert sRGB values to linear RGB values
+    #       Due to Gamma Correction of sRGB values, the original linear RGB values can be obtained as such
+    #       Xi = pow(nsXi, 2.2)
+    #   3. Consider linear RGB values as transmission of each wavelength, and convert to absorbance:
+    #       By Absorbance = -log(Transmission),
+    #       AXi = -log(Xi)
+    #   4. Linearly interpolate absorbance based on f = [Indicator Base Form] / [Indicator Acid Form]
+    #       AX = AXa / (1 + f) + AXb * f / (1 + f)
+    #   5. Convert back to transmission (linear RGB): X = pow(10, -AX)
+    #   6. Convert back to sRGB and un-normalize: sX = pow(X, 1 / 2.2) * 255
+    # =======================================================
+    def get_solution_color(self, pH: float, index: int) -> QColor:
+        sRGBa: QColor = self.config_data.indicators[index].acid_color # It is guranteed that there is a color
+        sRGBb: QColor = self.config_data.indicators[index].base_color # It is guranteed that there is a color
+        f = pow(10, -self._get_p_In_HIn(pH, index))
+
+        # Normalize and De-Gamma
+        RGBa: List[float] = [ pow(sRGBa.redF(), 2.2), pow(sRGBa.greenF(), 2.2), pow(sRGBa.blueF(), 2.2) ]
+        RGBb: List[float] = [ pow(sRGBb.redF(), 2.2), pow(sRGBb.greenF(), 2.2), pow(sRGBb.blueF(), 2.2) ]
+
+        # Convert to Absorbance
+        Aa: List[float] = [ -math.log10(X) for X in RGBa ]
+        Ab: List[float] = [ -math.log10(X) for X in RGBb ]
+
+        # Interpolate
+        A: List[float] = [ a / (1 + f) + b * f / (1 + f) for a, b in zip(Aa, Ab) ]
+
+        # Reconvert back to sRGB
+        sRGB: List[int] = [ int(pow(pow(10, -AX), 1 / 2.2) * 255) for AX in A ]
+        return QColor(sRGB[0], sRGB[1], sRGB[2])
+        
 # =======================================================
 # Manage Chemicals: Manage List of Chemicals Used in App
 # TODO: Add Tool tip to elements
@@ -169,6 +349,7 @@ class ColorPickerWidget(QWidget):
         if self.label_pick.text() == "선택된 색 : 없음": return None # Check manually by string since selected_color is always valid
         return self.selected_color
 
+# TODO: Get Rid of auto mouse move behavior
 # AddEditChemicalModal: Modal Containing Fields for Individual Chemical Add/Edit
 class AddEditChemicalModal(QDialog):
     def __init__(
@@ -739,8 +920,10 @@ class DynamicIndicatorList(QWidget):
         for entry in self.entries: entry.set_read_only(read_only)
         self.button_plus.setEnabled(not read_only)
 
+# TODO: Why does space button trigger submit?
 # ConfigurationPanel: Panel on Left for Simulation Configuration
 class ConfigurationPanel(QWidget):
+    MAX_INDICATOR_NUM = 3
     is_running_simulation_changed = Signal(bool) # True: start running, False: stop running
     # Panel that contains all configuration data
     def __init__(self, simulation_obj: Simulation):
@@ -848,7 +1031,7 @@ class ConfigurationPanel(QWidget):
         layout_groupbox_config.setContentsMargins(12, 8, 12, 8)
         layout_groupbox_config.setSpacing(4)
 
-        self.indicator_list = DynamicIndicatorList(self.simulation_obj, 2)
+        self.indicator_list = DynamicIndicatorList(self.simulation_obj, self.MAX_INDICATOR_NUM)
         layout_groupbox_config.addWidget(self.indicator_list)
         
         # Buttons for clear and submit
@@ -872,7 +1055,8 @@ class ConfigurationPanel(QWidget):
         if (
             not self.selected_analyte or
             not self.selected_titrant or
-            not self.indicator_list.indicators
+            not self.indicator_list.indicators or
+            self.selected_analyte.is_acid == self.selected_titrant.is_acid
         ):
             return None
         return SimulationConfigData(
@@ -893,9 +1077,10 @@ class ConfigurationPanel(QWidget):
             # Disable the selection of chemical type the other side already chose
             if self.selected_titrant.is_acid: enable_acid = False
             else: enable_base = False
-        self.selected_analyte = ManageSelectChemicalsModal.get_chemical(self, self.simulation_obj, enable_acid, enable_base, False)
+        analyte = ManageSelectChemicalsModal.get_chemical(self, self.simulation_obj, enable_acid, enable_base, False)
         # If no chemical is selected return
-        if not self.selected_analyte: return
+        if not analyte: return
+        self.selected_analyte = analyte
         # Display properties of selection
         self.label_analyte.setText(self.selected_analyte.name)
         if self.selected_analyte.is_acid:
@@ -910,9 +1095,10 @@ class ConfigurationPanel(QWidget):
             # Disable the selection of chemical type the other side already chose
             if self.selected_analyte.is_acid: enable_acid = False
             else: enable_base = False
-        self.selected_titrant = ManageSelectChemicalsModal.get_chemical(self, self.simulation_obj, enable_acid, enable_base, False)
+        titrant = ManageSelectChemicalsModal.get_chemical(self, self.simulation_obj, enable_acid, enable_base, False)
         # If no chemical is selected return
-        if not self.selected_titrant: return
+        if not titrant: return
+        self.selected_titrant = titrant
         # Display properties of selection
         self.label_titrant.setText(self.selected_titrant.name)
         if self.selected_titrant.is_acid:
@@ -974,6 +1160,8 @@ class TitrantVolumeManager(QObject):
         self.is_user_moving_slider = False
     def end_simulation(self):
         self.timer.stop()
+        self.is_autotitration_on = False
+        self.is_autotitration_on_changed.emit()
 
 # =======================================================
 # Experiment Visuals: Visualization of Experiment
@@ -1095,10 +1283,11 @@ class TitrationModelFactory():
 # ExperimentVisuals: Paints Experiment
 class ExperimentVisuals(QWidget):
     # Colors used
-    GLASS_COLOR = QColor(230, 230, 230, 40)
+    GLASS_COLOR = QColor(230, 230, 240, 40)
+    WATER_COLOR = QColor(220, 220, 245, 40)
     TITRANT_COLOR = QColor(100, 180, 255, 150)
-    WATER_COLOR = QColor(220, 230, 240, 80)
     REDSCREW_COLOR = QColor(220, 70, 70, 255)
+    # TODO: Consider Removing Water Tint
 
     # Only created once simulation starts, and destroyed when over
     def __init__(self, simulation_obj: Simulation, titrant_volume_manager: TitrantVolumeManager, indicator_index: int):
@@ -1120,10 +1309,12 @@ class ExperimentVisuals(QWidget):
         self.titrant_volume_manager.is_user_moving_slider_changed.connect(self._on_user_moving_slider_change)
         self.titrant_volume_manager.current_volume_changed.connect(self._on_current_volume_change)
     def paintEvent(self, _: QPaintEvent):
+        # TODO: Render Color of Solution
         max_titrant_volume: float = self.simulation_obj.get_max_titrant_volume()
         current_titrant_volume: float = self.simulation_obj.titrant_volume
         analyte_volume: float = self.simulation_obj.config_data.analyte.volume
-        # TODO: Render Text about  pH, indicator name
+        current_pH: float = self.simulation_obj.get_current_pH()
+        solution_color: QColor = self.simulation_obj.get_solution_color(current_pH, self.indicator_index)
         painter = QPainter(self)
         # Float coordinates look smooth
         painter.setRenderHint(QPainter.Antialiasing)
@@ -1140,7 +1331,7 @@ class ExperimentVisuals(QWidget):
         # Info Rect #TODO: Set font, size, color etc properties
         rect_info = QRect(10, 10, w, 40)
         # painter.fillRect(rect_info, Qt.red)
-        painter.drawText(rect_info, Qt.AlignLeft, f"{self.simulation_obj.config_data.indicators[self.indicator_index].name}\npH : 4.4")
+        painter.drawText(rect_info, Qt.AlignLeft, f"{self.simulation_obj.config_data.indicators[self.indicator_index].name}\npH : {current_pH:.2f}")
         # Burette
         painter.setPen(QPen(Qt.black, 1))
         painter.setBrush(self.GLASS_COLOR)
@@ -1154,6 +1345,9 @@ class ExperimentVisuals(QWidget):
         painter.setBrush(self.GLASS_COLOR)
         painter.drawPolygon(transform.map(self.model_factory.conical_flask()))
         # Conical Flask Fluid
+        painter.setPen(QPen(Qt.black, 0.5))
+        painter.setBrush(solution_color)
+        painter.drawPolygon(transform.map(self.model_factory.fluid_conical_flask((analyte_volume + current_titrant_volume) / (analyte_volume + max_titrant_volume))))
         painter.setPen(QPen(Qt.black, 0.5))
         painter.setBrush(self.WATER_COLOR)
         painter.drawPolygon(transform.map(self.model_factory.fluid_conical_flask((analyte_volume + current_titrant_volume) / (analyte_volume + max_titrant_volume))))
@@ -1203,6 +1397,7 @@ class ExperimentVisuals(QWidget):
 
 # Simulation Panel: Shows up to 2 Visuals of Experiment
 class SimulationPanel(QWidget):
+    # TODO: Add QSS to make it seem this widget exists even when simulation isn't running
     def __init__(self, simulation_obj: Simulation, titrant_volume_manager: TitrantVolumeManager):
         super().__init__()
         self.simulation_obj: Simulation = simulation_obj
@@ -1220,15 +1415,139 @@ class SimulationPanel(QWidget):
         for i in range(len(self.simulation_obj.config_data.indicators)): self.layout_main.addWidget(
             ExperimentVisuals(self.simulation_obj, self.titrant_volume_manager, i)
         )
-    def end_simulation(self): self._clear_layout()
+    def end_simulation(self):
+        self._clear_layout()
 
 # =======================================================
 # Calculation Display: pH Graph, Calculation
 # =======================================================
 
-class CalculationsPanel(QTabWidget):
-    def __init__(self):
+# pHGraph: Titration Curve
+class pHGraphWidget(QWidget):
+    INDICATOR_BAND_PRECISION = 200 # Split the color change range into 300
+    CURRENT_POINT_COLOR = QColor("red")
+    EQUIVALENCE_POINT_COLOR = QColor("black")
+    def __init__(self, simulation_obj: Simulation, titrant_volume_manager: TitrantVolumeManager):
+        #TODO: Change color of all elements for style
         super().__init__()
+        self.simulation_obj: Simulation = simulation_obj
+        self.titrant_volume_manager: TitrantVolumeManager = titrant_volume_manager
+        self.current_point: pyqtgraph.ScatterPlotItem = pyqtgraph.ScatterPlotItem()
+        layout = QVBoxLayout(self)
+
+        # Set light mode
+        pyqtgraph.setConfigOption("background", "w") # Background White
+        pyqtgraph.setConfigOption("foreground", "k") # Foreground Black
+        self.graph_plot = pyqtgraph.PlotWidget()  
+        layout.addWidget(self.graph_plot)    
+
+        # Lock interaction
+        self.graph_plot.setMouseEnabled(x=False, y=False) # No dragging
+        self.graph_plot.setMenuEnabled(False) # Disable menu
+        self.graph_plot.hideButtons() # Hide buttons like overlay buttons
+
+        # Set title and axis names
+        self.graph_plot.setTitle("중화적정 곡선")
+        self.graph_plot.setLabel("bottom", "가한 적정액 부피 (mL)")
+        self.graph_plot.setLabel("left", "pH")
+        self.graph_plot.showGrid(x=True, y=True, alpha=0.2)
+        self.graph_plot.enableAutoRange(x=False, y=False)
+
+        # TODO: Allow click on points
+        # self.current_point.sigClicked.connect(self._on_current_point_click)
+        self.titrant_volume_manager.current_volume_changed.connect(lambda: self._draw_current_point())
+    def _draw_titration_curve(self):
+        # Set ticks and range
+        max_volume = self.simulation_obj.get_max_titrant_volume()
+        self.graph_plot.setXRange(0, max_volume, padding=0)
+        self.graph_plot.setYRange(0, 14, padding=0)
+        # Draw curve
+        xs = np.linspace(0, max_volume, 500)
+        ys = np.array([self.simulation_obj.get_pH(x) for x in xs])
+        self.graph_plot.plot(xs, ys, pen=pyqtgraph.mkPen("k", width=2))
+    def _draw_indicator_bands(self):
+        for indicator_index, indicator in enumerate(self.simulation_obj.config_data.indicators):
+            # Create pH space for band
+            pKa: float = indicator.pK_ if indicator.is_acid else 14 - indicator.pK_ # Guaranteed that pK_ is not None
+            color_change_pH_space = np.linspace(pKa - 1, pKa + 1, self.INDICATOR_BAND_PRECISION)
+            
+            # Create short image
+            height: int = self.INDICATOR_BAND_PRECISION
+            width: int = 2 # To be stretched later
+            # Actually I was recommended to use (height, width, 3) but this breaks. So I'm just sticking to this
+            image = np.zeros((width, height, 3), dtype=np.uint8) # Create an image of height x width pixels each having RGB channel encoded in uint8 (0-255)
+            for i, pH in enumerate(color_change_pH_space):
+                color: QColor = self.simulation_obj.get_solution_color(pH, indicator_index)
+                image[:, i, :] = (color.red(), color.green(), color.blue()) # Broadcast the tuple to last axis
+            
+            item_image = pyqtgraph.ImageItem(image)
+            self.graph_plot.addItem(item_image)
+            max_volume = self.simulation_obj.get_max_titrant_volume()
+            item_image.setRect(QRectF(0, pKa - 1, max_volume, 2)) # Image is stretched to fit this rect
+            item_image.setOpacity(0.4) # Opacity
+            
+            # Add Text
+            text_name = pyqtgraph.TextItem(
+                text=f"{indicator.name}",
+                anchor=(0, 0.5),   # Anchor on center left
+                color=(0, 0, 0)
+            )
+            self.graph_plot.addItem(text_name)
+            text_name.setPos(0, pKa) # Center Left
+            text_name.setZValue(20)  # Send text above image
+    def _draw_current_point(self):
+        current_pH = self.simulation_obj.get_current_pH()
+        if not current_pH: return # Quick fix for config_data refer error at end_simulation
+        self.current_point.setData(
+            [self.simulation_obj.titrant_volume], [current_pH],
+            size=9,
+            pen=pyqtgraph.mkPen(self.CURRENT_POINT_COLOR),
+            brush=pyqtgraph.mkBrush(self.CURRENT_POINT_COLOR),
+            symbol="o"
+        )
+    def _draw_equivalence_point_and_line(self):
+        equivalence_volume = self.simulation_obj.get_equivalence_titrant_volume()
+        self.graph_plot.addItem(pyqtgraph.InfiniteLine(
+            pos=equivalence_volume,
+            angle=90,
+            pen=pyqtgraph.mkPen("r", style=Qt.DotLine, width=2)
+        ))
+        pass
+    def start_simulation(self):
+        self._draw_titration_curve()
+        self._draw_indicator_bands()
+        self.graph_plot.addItem(self.current_point)
+        self._draw_equivalence_point_and_line()
+        self._draw_current_point()
+    def end_simulation(self):
+        self.current_point.clear()
+        self.graph_plot.clear() # Clears all items
+
+# CalculationInfo: Displays How the Simulation Calculated with Approximating Methods
+class CalculationInfo(QWidget):
+    def __init__(self, simulation_obj: Simulation, titrant_volume_manager: TitrantVolumeManager):
+        super().__init__()
+        self.simulation_obj: Simulation = simulation_obj
+        self.titrant_volume_manager: TitrantVolumeManager = titrant_volume_manager
+
+# Calculation Panel: Visualization into Graph and Calculations
+class CalculationsPanel(QTabWidget):
+    def __init__(self, simulation_obj: Simulation, titrant_volume_manager: TitrantVolumeManager):
+        super().__init__()
+        self.simulation_obj: Simulation = simulation_obj
+        self.titrant_volume_manager: TitrantVolumeManager = titrant_volume_manager
+        self.setEnabled(False)
+
+        self.pH_graph_widget = pHGraphWidget(self.simulation_obj, self.titrant_volume_manager)
+
+        self.addTab(self.pH_graph_widget, "적정곡선")
+        self.addTab(CalculationInfo(self.simulation_obj, self.titrant_volume_manager), "계산결과")
+    def start_simulation(self):
+        self.setEnabled(True)
+        self.pH_graph_widget.start_simulation()
+    def end_simulation(self):
+        self.setEnabled(False)
+        self.pH_graph_widget.end_simulation()
 
 
 # =======================================================
@@ -1320,11 +1639,13 @@ class SliderCard(QFrame):
     def get_autotitration_speed(self) -> float: return self.dspin_speed.value()
     def start_simulation(self):
         self.setEnabled(True)
+        # self.button_start.setText("▶")
         max_volume = self.simulation_obj.get_max_titrant_volume()
         self.slider_titrant_volume.setMaximum(max_volume * self.SLIDER_VALUE_TO_VOLUME)
         self.slider_ticks.set_scale(max_volume, 5) # Set ticks
     def end_simulation(self):
         self.setEnabled(False)
+        # self.button_start.setText("▶")
         # self.label_titrant_volume.setText("0.00mL")
         self.slider_titrant_volume.setValue(0)
         self.slider_ticks.clear() # Clear ticks
@@ -1442,10 +1763,10 @@ class MainWindow(QMainWindow):
         # Add widgets to main row
         config_panel = ConfigurationPanel(self.simulation_obj)
         self.simulation_panel = SimulationPanel(self.simulation_obj, self.titrant_volume_manager)
-        self.calculations_panel = CalculationsPanel()
+        self.calculations_panel = CalculationsPanel(self.simulation_obj, self.titrant_volume_manager)
         layout_main_row.addWidget(config_panel)
-        layout_main_row.addWidget(self.simulation_panel, stretch=3)
-        layout_main_row.addWidget(self.calculations_panel, stretch=2) #TODO: Modify value
+        layout_main_row.addWidget(self.simulation_panel, stretch=4)
+        layout_main_row.addWidget(self.calculations_panel, stretch=3) #TODO: Modify value
         
         # Signals
         # TODO: Consider moving simulation start/stop button to simulation panel
@@ -1458,13 +1779,14 @@ class MainWindow(QMainWindow):
         self.titrant_volume_manager.start_simulation()
         # Activate all components as simulation has started
         self.simulation_panel.start_simulation()
+        self.calculations_panel.start_simulation()
         # Activate and configure slider card
         self.slider_card.start_simulation()
     def end_simulation(self):
         self.titrant_volume_manager.end_simulation()
         self.simulation_panel.end_simulation()
+        self.calculations_panel.end_simulation()
         self.slider_card.end_simulation()
-
 
 # Main Entry Point
 def main():

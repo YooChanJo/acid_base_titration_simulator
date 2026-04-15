@@ -2,14 +2,14 @@
 
 ## Requirements
 
-* Python 3.7
+* Python >= 3.7
 
 ## Installation
 
 Install the required dependency:
 
 ```
-pip install PySide6
+pip install PySide6 pyqtgraph
 ```
 
 ## Running the Program

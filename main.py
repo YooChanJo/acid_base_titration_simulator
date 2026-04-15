@@ -42,7 +42,7 @@ chemical_library = {
     "INDICATOR": {
         # Indicators of non-monoprotic features should be handled later on
         # All indicators are treated as monoprotic
-        "METHYL_ORANGE": Chemical("Methyl Orange", True, False, 3.4e-4, QColor(220, 40, 40), QColor(220, 40, 40)),
+        "METHYL_ORANGE": Chemical("Methyl Orange", True, False, 3.4e-4, QColor(220, 40, 40), QColor(220, 40, 40)), # What is wrong with the colors
         "BROMOTHYMOL_BLUE": Chemical("Bromothymol Blue (BTB)", True, False, 8e-8, QColor(240, 220, 0), QColor(240, 220, 0)),
         "PHENOLPHTHALEIN": Chemical("Phenolphthalein", True, False, 4e-10, QColor(0, 0, 0), QColor(255, 20, 147))
     }
