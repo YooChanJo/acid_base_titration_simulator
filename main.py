@@ -1,888 +1,1880 @@
-'''
-    This is a project for 문제해결과컴퓨팅사고 SKKU 2026-1 by team 지시약과 아이들
-    Licence for PySide6 by LGPL --> To be added Later
-'''
+# =======================================================
+# This is a project for 문제해결과컴퓨팅사고 SKKU 2026-1
+# Team: 지시약과 아이들
+# Licence for PySide6 by LGPL #TODO: To be added Later
+# =======================================================
+
+# Imports
 import sys
-from PySide6.QtCore import Signal, QRect, Qt, QPointF, QTimer, QEvent
-from PySide6.QtGui import QColor, QPainter, QPen, QPaintEvent, QPolygonF, QTransform, QMouseEvent, QCursor
-from PySide6.QtWidgets import (QApplication, QWidget, QStackedWidget, QVBoxLayout, QHBoxLayout,
-                               QLabel, QPushButton, QGroupBox, QRadioButton, QFrame, QComboBox, QDoubleSpinBox, QToolButton, QLineEdit,
-                               QTabWidget, QColorDialog, QSlider)
+from dataclasses import dataclass, field
+from typing import List, Dict, Callable
+from enum import Enum
+import copy
+import math
 
+# PyQtGraph Imports
+import numpy as np
+import pyqtgraph
 
-# Simple Class for Acids and Bases
+# PySide6 Imports
+from PySide6.QtCore import (
+    Signal,                                                 # Signals & Events
+    QPointF, QRect, QRectF,                                 # Geometry & Coordinates
+    Qt, QObject, QTimer,                                    # Utilities / Timing / Flags
+)
+from PySide6.QtGui import (
+    QPainter, QPaintEvent, QPen, QPolygonF, QTransform,     # Painting & Drawing
+    QColor, QCursor,                                        # Colors & Cursor
+    QMouseEvent,                                            # Input Events
+)
+from PySide6.QtWidgets import (
+    # Application
+    QApplication, QMainWindow,
+    # Containers & Layouts
+    QColorDialog, QDialog, QFrame, QGroupBox, QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QScrollArea,
+    # Input Widgets
+    QComboBox, QDoubleSpinBox, QLineEdit, QPushButton, QSlider, QToolButton,
+    # Etc
+    QLabel, QAbstractItemView, QTableWidgetItem, QHeaderView, QToolTip
+)
+
+# =======================================================
+# Memory Management Policy (MMP)
+# 1. All Variables Kept Singleton, Passed by Reference
+# 2. Exception for Initialization of Internal Variables
+# =======================================================
+# Type Annotation Policy
+# 1. All Non-Widget Class Data Variable Types Annotated
+# 2. Return Values Annotated When Not Explicit
+# 3. When Explicit, Return Values Optionally Annotated
+# =======================================================
+
+# =======================================================
+# Abstract Objects: For Calculation and Simulation
+# =======================================================
+
+# Chemical: Stores information of a single substance
+@dataclass
 class Chemical():
-    def __init__(self, name: str, is_acid: bool, is_strong: bool, k_val: float | None = None, acid_color: QColor | None = None, base_color: QColor | None = None):
-        self.name = name
-        self.is_acid = is_acid
-        self.is_strong = is_strong
-        self.k_val = k_val # K value at 25 degrees, specified only when is_strong == False
-        self.acid_color = acid_color
-        self.base_color = base_color
+    # All chemicals are treated monoprotic including indicators
+    name: str
+    is_acid: bool
+    is_strong: bool
+    pK_: float | None = None # pKa or pKb depending on is_acid
+    # Only for indicators
+    acid_color: QColor | None = None # Acid Color (HIn)
+    base_color: QColor | None = None # Base Color (In-)
+
+# PureSolution: Stores solution info (Chemical, Concentration, Volume)
+@dataclass
 class PureSolution():
-    def __init__(self, chemical: Chemical, concentration: float, volume: float | None = None):
-        self.chemical = chemical
-        self.concentration = concentration
-        self.volume = volume # Volume can be optional
+    chemical: Chemical
+    concentration: float
+    volume: float | None = None # This field does not exist for titrants
 
-# Chemical Library
-chemical_library = {
-    "ACID": {
-        # Strong Acids
-        "HYDROCHLORIC_ACID": Chemical("HCl (Hydrochloric Acid)", True, True),
-        # Weak Acids
-        "ACETIC_ACID": Chemical("CH₃COOH (Acetic Acid)", True, False, 1.8e-5)
-    },
-    "BASE": {
-        # Strong Bases
-        "SODIUM_HYDROXIDE": Chemical("NaOH (Sodium Hydroxide)", False, True),
-        # Weak Bases
-        "SODIUM_ACETATE": Chemical("CH₃COONa (Sodium Acetate)", False, False, 5.6e-10)
-    },
-    "INDICATOR": {
-        # Indicators of non-monoprotic features should be handled later on
-        # All indicators are treated as monoprotic
-        "METHYL_ORANGE": Chemical("Methyl Orange", True, False, 3.4e-4, QColor(220, 40, 40), QColor(220, 40, 40)), # What is wrong with the colors
-        "BROMOTHYMOL_BLUE": Chemical("Bromothymol Blue (BTB)", True, False, 8e-8, QColor(240, 220, 0), QColor(240, 220, 0)),
-        "PHENOLPHTHALEIN": Chemical("Phenolphthalein", True, False, 4e-10, QColor(0, 0, 0), QColor(255, 20, 147))
-    }
-}
+# ChemicalType: Enum["ACID", "BASE", "INDICATOR"] --> Specific Categorization for this App
+class ChemicalType(Enum):
+    ACID = "ACID"
+    BASE = "BASE"
+    INDICATOR = "INDICATOR"
 
-
-
-#  TODO: Add default sizes to windows
-# Start Screen
-class StartScreen(QWidget):
-    request_next_page = Signal()
+# SimulationConfigData: Configuration Data for Simulation
+@dataclass
+class SimulationConfigData():
+    analyte: PureSolution | None = None
+    titrant: PureSolution | None = None
+    indicators: List[Chemical] = field(default_factory=list)
+    def clear(self): # Reinitialize
+        self.analyte = self.titrant = None
+        self.indicators.clear()
+    
+# Simulation: Main Class for Simulation Management, Used To Calculate States
+class Simulation:
     def __init__(self):
-        super().__init__()
-
-        # Create main headline and button for continue
-        headline = QLabel("Welcome to Acid-Base Titration Simulator")
-        button_continue = QPushButton("Get Started")
-        # button_continue.setIcon()
-        button_continue.clicked.connect(lambda: self.request_next_page.emit())
-        
-        layout = QVBoxLayout()
-        layout.addWidget(headline)
-        layout.addWidget(button_continue)
-        self.setLayout(layout)
-
-# Configuration Screen
-# TODO: Add Clear Functionality
-class ConfigurationScreen(QWidget):
-    class ConfigData():
-        def __init__(self, analyte: PureSolution, titrant: PureSolution, indicator: Chemical):
-            self.analyte = analyte
-            self.titrant = titrant
-            self.indicator = indicator
-    request_next_page = Signal(ConfigData)
-    def __init__(self):
-        super().__init__()
-        layout = QVBoxLayout()
-        tabs = QTabWidget()
-        # Analyte and Titrant Configruation
-        tab_analyte_titrant = QWidget()
-        layout_analyte_titrant = QHBoxLayout()
-
-        self.config_analyte = self.SolutionConfigWidget(True, True)
-        toolbutton_swap = QToolButton()
-        toolbutton_swap.setText("Swap") # Change this later on to setIcon
-        self.config_titrant = self.SolutionConfigWidget(False, False)
-        toolbutton_swap.clicked.connect(self.__swap_acid_base)
-
-        layout_analyte_titrant.addWidget(self.config_analyte)
-        layout_analyte_titrant.addWidget(toolbutton_swap)
-        layout_analyte_titrant.addWidget(self.config_titrant)
-        tab_analyte_titrant.setLayout(layout_analyte_titrant)
-
-        # Indicator Configuration
-        self.config_indicator = self.IndicatorConfigWidget()
-
-        layout_buttons = QHBoxLayout()
-        button_clear = QPushButton("Reset")
-        button_finish = QPushButton("Finish")
-        layout_buttons.addWidget(button_clear)
-        layout_buttons.addWidget(button_finish)
-
-        button_finish.clicked.connect(self.__submit_config)
-
-        tabs.addTab(tab_analyte_titrant, "Analyte && Titrant")
-        tabs.addTab(self.config_indicator, "Indicator")
-        layout.addWidget(tabs)
-        layout.addLayout(layout_buttons)
-        self.setLayout(layout)
-
-    def __swap_acid_base(self):
-        self.config_analyte.switch_acid_base()
-        self.config_titrant.switch_acid_base()
-    def __submit_config(self):
-        analyte = self.config_analyte.get_solution()
-        titrant = self.config_titrant.get_solution()
-        indicator = self.config_indicator.get_chemical()
-        if not analyte or not titrant or not indicator:
-            print("ERROR: There exist empty sections in the Form")
-            # TODO Need to add user warning message
-            return
-        self.request_next_page.emit(self.ConfigData(analyte, titrant, indicator))  
-
-    class SolutionConfigWidget(QGroupBox):
-        def __init__(self, is_analyte: bool, is_acid: bool):
-            super().__init__()
-            self.setTitle("Analyte" if is_analyte else "Titrate")
-            self.is_acid = is_acid
-            self.is_analyte = is_analyte
-            layout = QVBoxLayout()
-
-            current_type = "Acid" if self.is_acid else "Base"
-            self.label_type = QLabel(f"Type: {current_type}")
-
-            # Selection Between Predefined and Custom
-            self.radio_predefined = QRadioButton(f"Select from Predefined {current_type}s")
-            frame_predefined = QFrame()
-            layout_predefined = QVBoxLayout()
-            self.combo_predefined = QComboBox()
-            self.__configure_combo_predefined()
-            layout_predefined.addWidget(self.combo_predefined)
-            frame_predefined.setLayout(layout_predefined)
-            
-            self.radio_custom = QRadioButton(f"Custom {current_type}")
-            frame_custom = QFrame()
-            layout_custom = QVBoxLayout()
-            # Custom Name
-            layout_custom_name = QHBoxLayout()
-            label_custom_name = QLabel("Name :")
-            self.lineedit_custom_name = QLineEdit()
-            layout_custom_name.addWidget(label_custom_name)
-            layout_custom_name.addWidget(self.lineedit_custom_name)
-            # Strength
-            layout_custom_strength = QHBoxLayout()
-            label_custom_strength = QLabel("Strength :")
-            self.combo_custom_strength = QComboBox()
-            self.combo_custom_strength.addItem("Select...", None)
-            self.combo_custom_strength.addItem("Strong", True)
-            self.combo_custom_strength.addItem("Weak", False)
-            self.combo_custom_strength.setCurrentIndex(0)
-            self.combo_custom_strength.currentTextChanged.connect(self.__custom_strength_changed)
-            layout_custom_strength.addWidget(label_custom_strength)
-            layout_custom_strength.addWidget(self.combo_custom_strength)
-            # Dissociation Constant
-            layout_custom_k_val = QHBoxLayout()
-            self.label_custom_k_val = QLabel("K<sub>a</sub> at 25℃ :" if self.is_acid else "K<sub>b</sub> at 25℃ :")
-            self.lineedit_custom_k_val = QLineEdit()
-            self.lineedit_custom_k_val.setPlaceholderText("e.g., 1.2e-7") # TODO: Need manual checking validity for each input
-            self.label_custom_k_val.setEnabled(False)
-            self.lineedit_custom_k_val.setEnabled(False)
-            layout_custom_k_val.addWidget(self.label_custom_k_val)
-            layout_custom_k_val.addWidget(self.lineedit_custom_k_val)
-
-            layout_custom.addLayout(layout_custom_name)
-            layout_custom.addLayout(layout_custom_strength)
-            layout_custom.addLayout(layout_custom_k_val)
-            frame_custom.setLayout(layout_custom)
-
-            # Enabling and Disabling based on toggling
-            self.radio_predefined.toggled.connect(frame_predefined.setEnabled)
-            self.radio_custom.toggled.connect(frame_custom.setEnabled)
-            frame_predefined.setEnabled(False)
-            frame_custom.setEnabled(False)
-            self.radio_predefined.setChecked(True)
-            
-            layout_concentration = QHBoxLayout()
-            label_concentration = QLabel("Concentration :")
-            self.dspin_concentration = QDoubleSpinBox()
-            self.dspin_concentration.setMinimum(0.0)
-            self.dspin_concentration.setValue(1.0)
-            self.dspin_concentration.setSingleStep(0.1)
-            label_concentration_unit = QLabel("M (mol/L)")
-            layout_concentration.addWidget(label_concentration)
-            layout_concentration.addWidget(self.dspin_concentration)
-            layout_concentration.addWidget(label_concentration_unit)
-
-            layout.addWidget(self.label_type)
-            layout.addWidget(self.radio_predefined)
-            layout.addWidget(frame_predefined)
-            layout.addWidget(self.radio_custom)
-            layout.addWidget(frame_custom)
-            layout.addLayout(layout_concentration)
-
-            if is_analyte:
-                layout_volume = QHBoxLayout()
-                label_volume = QLabel("Volume :")
-                self.dspin_volume = QDoubleSpinBox()
-                self.dspin_volume.setRange(0.0, 10000.0)
-                self.dspin_volume.setValue(100.0)
-                self.dspin_volume.setSingleStep(1)
-                self.dspin_volume.setDecimals(1)
-                label_volume_unit = QLabel("mL")
-                layout_volume.addWidget(label_volume)
-                layout_volume.addWidget(self.dspin_volume)
-                layout_volume.addWidget(label_volume_unit)
-                
-                layout.addLayout(layout_volume)
-            
-            self.setLayout(layout)
-        def switch_acid_base(self):
-            self.is_acid = not self.is_acid
-            current_type = "Acid" if self.is_acid else "Base"
-            self.label_type.setText(f"Type: {current_type}")
-            self.radio_predefined.setText(f"Select from Predefined {current_type}s")
-            self.__configure_combo_predefined()
-            self.radio_custom.setText(f"Custom {current_type}")
-            self.label_custom_k_val.setText("K<sub>a</sub> at 25℃ :" if self.is_acid else "K<sub>b</sub> at 25℃ :")
-        def __configure_combo_predefined(self):
-            self.combo_predefined.clear()
-            self.combo_predefined.addItem("Select...", None)
-            first_key = "ACID" if self.is_acid else "BASE"
-            for key in chemical_library[first_key]:
-                self.combo_predefined.addItem(chemical_library[first_key][key].name, key)
-            self.combo_predefined.setCurrentIndex(0)
-        def __custom_strength_changed(self, text: str):
-            if text == "Strong":
-                self.label_custom_k_val.setEnabled(False)
-                self.lineedit_custom_k_val.setEnabled(False)
-            elif text == "Weak":
-                self.label_custom_k_val.setEnabled(True)
-                self.lineedit_custom_k_val.setEnabled(True)
-        def __check_valid(self) -> bool:
-            if self.radio_predefined.isChecked():
-                if not self.combo_predefined.currentData(): return False
-            elif self.radio_custom.isChecked():
-                if (
-                    not self.lineedit_custom_name.text() or
-                    (self.combo_custom_strength.currentData() == None) or
-                    (not self.combo_custom_strength.currentData() and not self.lineedit_custom_k_val.text())
-                ): return False
-            else: return False
-            return True
-        def get_solution(self) -> PureSolution | None:
-            # Check validity
-            if not self.__check_valid():
-                print("ERROR: Need to fill out all configurations for solution to proceed")
-                # TODO: Add here a user error message
-                return None
-            if self.radio_predefined.isChecked():
-                chem = chemical_library["ACID" if self.is_acid else "BASE"][self.combo_predefined.currentData()]
-                return PureSolution(
-                    Chemical(chem.name, self.is_acid, chem.is_strong, chem.k_val),
-                    self.dspin_concentration.value(),
-                    self.dspin_volume.value() if self.is_analyte else None
-                )
-            else: return PureSolution(
-                Chemical(
-                    self.lineedit_custom_name,
-                    self.is_acid,
-                    self.combo_custom_strength.currentData(),
-                    None if self.combo_custom_strength.currentData() else float(self.lineedit_custom_k_val.text())
-                ),
-                self.dspin_concentration.value(),
-                self.dspin_volume.value() if self.is_analyte else None
-            )
-    class IndicatorConfigWidget(QWidget):
-        def __init__(self):
-            super().__init__()
-            # self.setTitle("Configure Indicator")
-            layout = QVBoxLayout()
-            # Selection Between Predefined and Custom
-            self.radio_predefined = QRadioButton("Select from Predefined Indicators")
-            frame_predefined = QFrame()
-            layout_predefined = QVBoxLayout()
-            self.combo_predefined = QComboBox()
-            self.__configure_combo_predefined()
-            layout_predefined.addWidget(self.combo_predefined)
-            frame_predefined.setLayout(layout_predefined)
-            
-            radio_custom = QRadioButton("Custom Indicator")
-            frame_custom = QFrame()
-            layout_custom = QVBoxLayout()
-            # Custom Name
-            layout_custom_name = QHBoxLayout()
-            label_custom_name = QLabel("Name :")
-            self.lineedit_custom_name = QLineEdit()
-            layout_custom_name.addWidget(label_custom_name)
-            layout_custom_name.addWidget(self.lineedit_custom_name)
-            # Type
-            layout_custom_type = QHBoxLayout()
-            label_custom_type = QLabel("Type :")
-            self.combo_custom_type = QComboBox()
-            self.combo_custom_type.addItem("Select...", None)
-            self.combo_custom_type.addItem("Acid", True)
-            self.combo_custom_type.addItem("Base", False)
-            self.combo_custom_type.setCurrentIndex(0)
-            layout_custom_type.addWidget(label_custom_type)
-            layout_custom_type.addWidget(self.combo_custom_type)
-            # Dissociation Constant
-            layout_custom_k_val = QHBoxLayout()
-            label_custom_k_val = QLabel("K<sub>a</sub> or K<sub>b</sub> at 25℃ :")
-            self.lineedit_custom_k_val = QLineEdit()
-            self.lineedit_custom_k_val.setPlaceholderText("e.g., 1.2e-7") # Need manual checking validity for each input
-            layout_custom_k_val.addWidget(label_custom_k_val)
-            layout_custom_k_val.addWidget(self.lineedit_custom_k_val)
-            # Select Acid/Base Color
-            self.select_acid_color = self.ColorPickerWidget("Select Acid Color")
-            self.select_base_color = self.ColorPickerWidget("Select Base Color")
-
-            layout_custom.addLayout(layout_custom_name)
-            layout_custom.addLayout(layout_custom_type)
-            layout_custom.addLayout(layout_custom_k_val)
-            layout_custom.addWidget(self.select_acid_color)
-            layout_custom.addWidget(self.select_base_color)
-            frame_custom.setLayout(layout_custom)
-
-            # Enabling and Disabling based on toggling
-            self.radio_predefined.toggled.connect(frame_predefined.setEnabled)
-            radio_custom.toggled.connect(frame_custom.setEnabled)
-            frame_predefined.setEnabled(False)
-            frame_custom.setEnabled(False)
-            self.radio_predefined.setChecked(True)
-
-            layout.addWidget(self.radio_predefined)
-            layout.addWidget(frame_predefined)
-            layout.addWidget(radio_custom)
-            layout.addWidget(frame_custom)
-            
-            self.setLayout(layout)
-        def __configure_combo_predefined(self):
-            self.combo_predefined.clear()
-            self.combo_predefined.addItem("Select...", None)
-            for key in chemical_library["INDICATOR"]:
-                self.combo_predefined.addItem(chemical_library["INDICATOR"][key].name, key)
-            self.combo_predefined.setCurrentIndex(0)
-        def get_chemical(self) -> Chemical | None:
-            if self.radio_predefined.isChecked():
-                data = self.combo_predefined.currentData()
-                if not data: return None
-                indic = chemical_library["INDICATOR"][data]
-                return Chemical(indic.name, indic.is_acid, indic.is_strong, indic.k_val, indic.acid_color, indic.base_color)
-            else:
-                name = self.lineedit_custom_name.text()
-                is_acid = self.combo_custom_type.currentData()
-                acid_color = self.select_acid_color.get_color()
-                k_val = self.lineedit_custom_k_val.text()
-                base_color = self.select_base_color.get_color()
-                if not name or not is_acid or not k_val or not acid_color or not base_color: return None
-                return Chemical(name, is_acid, False, float(k_val), acid_color, base_color)
-        class ColorPickerWidget(QWidget):
-            def __init__(self, btn_text: str):
-                super().__init__()
-                # self.setWindowTitle("Custom Color Tool")
-                self.selected_color = QColor("gray") # Default
-                self.btn_text = btn_text
-                layout = QHBoxLayout()
-                
-                self.btn_pick = QToolButton()
-                self.btn_pick.setText(btn_text)
-                self.btn_pick.clicked.connect(self.choose_color)
-                self.label = QLabel("No color selected yet")
-                self.color_swatch = QLabel()
-                self.color_swatch.setFixedSize(15, 15)  # Make it a square
-
-                layout.addWidget(self.btn_pick)
-                layout.addWidget(self.label)
-                layout.addWidget(self.color_swatch)
-                self.setLayout(layout)
-            def choose_color(self):
-                color = QColorDialog.getColor(self.selected_color, self, self.btn_text)
-                if color.isValid():
-                    self.selected_color = color
-                    self.label.setText(f"Selected : {color.name()}")
-                    self.color_swatch.setStyleSheet(f"background-color: {color.name()}; border: 1px solid black;")
-            def get_color(self) -> QColor | None:
-                if self.label.text() == "No color selected yet": return None
-                return QColor(self.selected_color.red(), self.selected_color.green(), self.selected_color.blue())
- 
-# Simulation Screen
-class SimulationScreen(QWidget):
-    TIMEOUT_INTERVAL = 50 # milliseconds
-    request_configuration_page = Signal()
-    def __init__(self):
-        super().__init__()
-        self.reloaded = False
-        # Create main elements
-        layout = QVBoxLayout()
-        self.utility_bar = self.UtilityBar()
-        self.experiment_visuals = self.ExperimentVisuals()
-        self.utility_bar.hide()
-        self.experiment_visuals.hide()
-        layout.addWidget(self.utility_bar, 0)
-        layout.addWidget(self.experiment_visuals, 1)
-        self.setLayout(layout)
-        # Configuraiton Panel on New Window | self added as parent to add dependency
-        self.configuration_panel = self.ConfigurationPanel(self)
-        # Disable X button
-        self.configuration_panel.setWindowFlags(
-            Qt.Window |
-            Qt.WindowTitleHint |
-            Qt.WindowMinimizeButtonHint |
-            Qt.WindowMaximizeButtonHint
-        )
-        # Calculation Panel on New Window | self added as parent to add dependency
-        self.calculation_panel = self.CalculationPanel(self)
-        # Disable X button
-        self.calculation_panel.setWindowFlags(
-            Qt.Window |
-            Qt.WindowTitleHint |
-            Qt.WindowMinimizeButtonHint |
-            Qt.WindowMaximizeButtonHint
-        )
-
-        # Value Definition & Initialization
-        self.is_user_moving_slider = False
-        self.is_autotitration_on = False
-        self.current_volume = 0.0
-        self.autotitration_speed = 0.5
-
-        # Handle Signals
-        self.configuration_panel.slider_start_moving_by_user.connect(self.__on_slider_start_move_by_user)
-        self.configuration_panel.volume_changed.connect(self.__on_volume_change)
-        self.configuration_panel.autotitration_start_stop_changed.connect(self.__on_autotitration_start_stop_change)
-        self.configuration_panel.autotitration_speed_changed.connect(self.__on_autotitration_speed_change)
-        self.experiment_visuals.release_hold_changed.connect(self.__on_release_hold_change)
-
-        self.utility_bar.reconfigure_clicked.connect(self.__on_reconfigure_click)
-
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.__on_timer_timeout)
-    def __on_slider_start_move_by_user(self, start_move: bool):
-        self.is_user_moving_slider = start_move
-        # Send signal to experiment visuals to change stopcock if autotitration off
-        if not self.is_autotitration_on:
-            self.experiment_visuals.release_or_hold(start_move)
-        # Stop timer from firing or restart if autotitration is on
-        if self.is_autotitration_on:
-            if start_move: self.timer.stop()
-            else: self.timer.start(self.TIMEOUT_INTERVAL)
-    def __turn_autotitration_on_off(self, turn_on: bool):
-        if turn_on:
-            self.is_autotitration_on = True
-            # Turn autotitration on in config panel --> change button text to stop autotitration and enable speed features
-            self.configuration_panel.change_widgets_for_autotitration_on_off(True)
-            # Change experiment visuals to stopcock release
-            self.experiment_visuals.release_or_hold(True)
-            # Start timer
-            self.timer.start(self.TIMEOUT_INTERVAL)
-        else:
-            self.is_autotitration_on = False
-            # Turn autotitration off in config panel --> change button tesxt to start autotitrationi and disable speed features
-            self.configuration_panel.change_widgets_for_autotitration_on_off(False)
-            # Change experiment visuals to stopcock hold
-            self.experiment_visuals.release_or_hold(False)
-            # Stop timer
-            self.timer.stop()
-    def __on_autotitration_start_stop_change(self):
-        if not self.is_autotitration_on: self.__turn_autotitration_on_off(True)
-        else: self.__turn_autotitration_on_off(False)
-    def __on_autotitration_speed_change(self, speed: float): self.autotitration_speed = speed
-    def __on_release_hold_change(self, is_released: bool):
-        if not is_released: self.__turn_autotitration_on_off(True)
-        else: self.__turn_autotitration_on_off(False)
-    def __on_timer_timeout(self):
-        # Set value of the slider
-        if self.current_volume == self.configuration_panel.slider_titration.maximum():
-            # Reset to 0
-            self.configuration_panel.slider_titration.setValue(0)
-            # Reached maximum, stop autotitration
-            self.__turn_autotitration_on_off(False)
-            return
-        # Multiply by 100 to match implementation
-        self.configuration_panel.slider_titration.setValue((self.current_volume + self.autotitration_speed * (self.TIMEOUT_INTERVAL / 1000)) * 100)
-    def __on_volume_change(self, volume: float):
-        # Change current value based on current speed
-        self.current_volume = volume
-        # Change info volume of config panel
-        self.configuration_panel.change_info_volume(volume)
-        # Rerender water level of experiment visuals
-    def reload_page(self, config_data: ConfigurationScreen.ConfigData, main_geometry: QRect):
-        if not config_data: return
-        # Block double reload
-        if self.reloaded: return
-        else: self.reloaded = True
-        # Show and configure widgets in main window
-        # self.utility_bar.show()
-        self.experiment_visuals.show()
-        # Set window right on the left of the original window
-        self.configuration_panel.config(config_data)
-        self.configuration_panel.move(main_geometry.x() - self.configuration_panel.frameGeometry().x() - 5, main_geometry.y())
-        self.configuration_panel.show()
-        # Set window right next to the original window
-        self.calculation_panel.move(main_geometry.x() + main_geometry.width() + 5, main_geometry.y())
-        self.calculation_panel.show()
-
-        # Control Variables Initialization
-        self.is_user_moving_slider = False
-        self.is_autotitration_on = False
-        self.current_volume = 0.0
-        self.autotitration_speed = 0.5
-    def clear_page(self):
-        # Block clear before reloading
-        if not self.reloaded: return
-        else: self.reload = False
-        self.configuration_panel.hide()
-        self.calculation_panel.hide()
-        self.utility_bar.hide()
-        self.experiment_visuals.hide()
-    def __on_reconfigure_click(self):
-        self.clear_page()
-        self.request_configuration_page.emit()
-    class UtilityBar(QWidget):
-        reconfigure_clicked = Signal()
-        def __init__(self):
-            super().__init__()
-            layout = QHBoxLayout()
-            button_reconfigure = QPushButton("Reconfigure")
-            button_theoretical_background = QPushButton("Theoretical Background")
-            layout.addWidget(button_reconfigure)
-            layout.addWidget(button_theoretical_background)
-            self.setLayout(layout)
-            button_reconfigure.clicked.connect(lambda: self.reconfigure_clicked.emit())
-
-    class ExperimentVisuals(QWidget):
-        # Colors used
-        # BURETTE_COLOR = QColor(200, 200, 200, 40)
-        GLASS_COLOR = QColor(230, 230, 230, 40)
-        # FLASK_COLOR = QColor(180, 190, 200, 50)
-        TITRANT_COLOR = QColor(100, 180, 255, 150)
-        WATER_COLOR = QColor(220, 230, 240, 80)
-        REDSCREW_COLOR = QColor(220, 70, 70, 255)
-
-        # Signals
-        release_hold_changed = Signal(bool) # bool value = is currently released --> will change to the opposite side
-        def __init__(self):
-            super().__init__()
-            self.is_released = False
-            self.titration_model = self.TitrationModel()
-            self.painted_stop_cock_release = None
-            self.painted_stop_cock_hold = None
-            self.setMouseTracking(True)
-        def paintEvent(self, event: QPaintEvent):
-            painter = QPainter(self)
-            # Float coordinates look smooth
-            painter.setRenderHint(QPainter.Antialiasing)
-            # Background White
-            rect = self.rect()
-            painter.fillRect(rect, Qt.white)
-            # transform that scales and then moves (0, 0) to the center of widget
-            transform = QTransform()
-            w = rect.width()
-            h = rect.height()
-            transform.translate(w / 2, h / 2) # second
-            transform.scale(h * 0.9, h * 0.9) # first
-            # Draw
-            # Burette
-            painter.setPen(QPen(Qt.black, 1))
-            painter.setBrush(self.GLASS_COLOR)
-            painter.drawPolygon(transform.map(self.titration_model.burette))
-            # Burette Titrant
-            painter.setPen(QPen(Qt.black, 0.5))
-            painter.setBrush(self.TITRANT_COLOR)
-            painter.drawPolygon(transform.map(self.titration_model.burette.titrant_edge(0.7, self.is_released)))
-            # Conical Flask
-            painter.setPen(QPen(Qt.black, 1))
-            painter.setBrush(self.GLASS_COLOR)
-            painter.drawPolygon(transform.map(self.titration_model.conical_flask))
-            # Conical Flask Water
-            painter.setPen(QPen(Qt.black, 0.5))
-            painter.setBrush(self.WATER_COLOR)
-            painter.drawPolygon(transform.map(self.titration_model.conical_flask.water_edge(0.3)))
-            # Red Screw
-            painter.setPen(QPen(Qt.black, 1))
-            painter.setBrush(self.REDSCREW_COLOR)
-            painter.drawPolygon(transform.map(self.titration_model.red_screw))
-            # Stopcock
-            painter.setPen(QPen(Qt.black, 1))
-            painter.setBrush(self.GLASS_COLOR)
-            self.painted_stop_cock_release = transform.map(self.titration_model.stop_cock_release)
-            self.painted_stop_cock_hold = transform.map(self.titration_model.stop_cock_hold)
-            painter.drawPolygon(
-                self.painted_stop_cock_release
-                if self.is_released else self.painted_stop_cock_hold
-            )
-            painter.end()
-        def mouseMoveEvent(self, event: QMouseEvent):
-            # When mouse hovers above stopcock, change mouse shape to make it seem the stopcock is pressable
-            if not self.painted_stop_cock_release or not self.painted_stop_cock_hold: return
+        # Library of predefined chemicals
+        self.predefined_chemical_library: Dict[ChemicalType, Dict[str, Chemical]] = {
+            ChemicalType.ACID: {
+                # Strong Acids
+                "HYDROCHLORIC_ACID": Chemical("HCl (Hydrochloric Acid)", True, True),
+                # Weak Acids
+                "ACETIC_ACID": Chemical("CH₃COOH (Acetic Acid)", True, False, 4.76),
+                "FORMIC_ACID": Chemical("HCOOH (Formic Acid)", True, False, 3.75)
+            },
+            ChemicalType.BASE: {
+                # Strong Bases
+                "SODIUM_HYDROXIDE": Chemical("NaOH (Sodium Hydroxide)", False, True),
+                # Weak Bases
+                "SODIUM_ACETATE": Chemical("CH₃COONa (Sodium Acetate)", False, False, 9.24),
+                "SODIUM_HYPOCHLORITE": Chemical("NaOCl (Sodium Hypochlorite)", False, False, 6.47)
+            },
+            ChemicalType.INDICATOR: {
+                # All indicators are weak
+                "METHYL_ORANGE": Chemical("Methyl Orange", True, False, 3.47, QColor(227, 38, 54), QColor(252, 189, 17)),
+                # "METHYL_ORANGE": Chemical("Methyl Orange", True, False, 3.47, QColor(200, 60, 60), QColor(245, 200, 80)),
+                "BROMOTHYMOL_BLUE": Chemical("Bromothymol Blue (BTB)", True, False, 7.0, QColor(235, 215, 60), QColor(40, 120, 220)),
+                "PHENOLPHTHALEIN": Chemical("Phenolphthalein", True, False, 9.3, QColor(255, 255, 255), QColor(230, 80, 170))
+            },
+        }
+        # Users will add/edit/delete from this dictionary
+        self.custom_chemical_library: Dict[ChemicalType, Dict[str, Chemical]] = {
+            ChemicalType.ACID: {},
+            ChemicalType.BASE: {},
+            ChemicalType.INDICATOR: {},
+        }
+        self.config_data: SimulationConfigData | None = None
+        self.titrant_volume: float = 0.0
+    def start(self, config_data: SimulationConfigData):
+        self.config_data = config_data
+        self.titrant_volume = 0.0
+    def end(self):
+        self.config_data = None
+        self.titrant_volume = 0.0
+    def get_equivalence_titrant_volume(self) -> float:
+        # This function is unsafe, only use when config_data exists
+        return self.config_data.analyte.concentration * self.config_data.analyte.volume / self.config_data.titrant.concentration
+    def get_max_titrant_volume(self) -> float:
+        # Allow twice the volume of equivalence point
+        return self.get_equivalence_titrant_volume() * 2
+    def get_current_mixture_volume(self) -> float: return self.config_data.analyte.volume + self.titrant_volume
+    # =======================================================
+    # Theoretical Background: Finding pH of Acid/Base Mixture
+    # Scenario: a(M) Va(mL) HA + b(M) Vb(mL) B
+    # Reactions:
+    #   HA + H₂O ⇌ A⁻ + H₃O⁺  K=Ka
+    #   B + H₂O ⇌ BH⁺ + OH⁻   K=Kb
+    #   2H₂O ⇌ H₃O⁺ + OH⁻     K=Kw
+    # Variables: [HA], [A⁻], [B], [BH⁺], [H₃O⁺], [OH⁻]
+    # Equations:
+    #   (a) [A⁻] * [H₃O⁺] / [HA] = Ka                (Equivalence of HA)
+    #   (b) [HA] + [A⁻] = a * Va / (Va + Vb) = Ca    (Conservation of Mass)
+    #   (c) [BH⁺] * [OH⁻] / [B] = Kb                 (Equivalence of B)
+    #   (d) [B] + [BH⁺] = b * Va / (Va + Vb) = Cb    (Conservation of Mass)
+    #   (e) [H₃O⁺] * [OH⁻] = Kw                      (Equivalence of Water Self-Ionization)
+    #   (f) [H₃O⁺] - [A⁻] = [OH⁻] - [BH⁺]            (Conservation of Charge)
+    # Solution:
+    #   1. Solve for [A⁻] and [BH⁺] in (a) & (b), (c) & (d)
+    #       [A⁻] = Ca * Ka / (Ka + [H₃O⁺])
+    #       [BH⁺] = Cb * Kb / (Kb + [OH⁻])
+    #   2. Substitute results from 1 and [OH⁻] = Kw / [H₃O⁺] from (e) to (f)
+    #       [H₃O⁺] - Ca * Ka / (Ka + [H₃O⁺]) = Kw / [H₃O⁺] - Cb * Kb / (Kb + Kw / [H₃O⁺])
+    #   3. For x > 0, we define function f:
+    #       f(x) = x - Ca * Ka / (Ka + x) - Kw / x + Cb * Kb / (Kb + Kw / x), with Ca, Cb, Ka, Kb, Kw > 0
+    #       The solution x₀ of f(x) = 0 is x₀ = [H₃O⁺]
+    #       It is additionally guaranteed that 1e-15 < x₀ < 10, due to the fact that initial analyte and titrant concentrations are at most 10M
+    #       For strong acid/bases we take Ka/Kb to its limit to infinity:
+    #           If HA is strong: Ca * Ka / (Ka + x) reduces to Ca
+    #           If B is strong: Cb * Kb / (Kb + Kw / x) reduces to Cb
+    #   4. Define y with relation x = pow(10, -y), so that the solution y₀ of f(pow(10, -y)) = 0 is y₀ = -log(x₀) = -log([H₃O⁺]) = pH
+    #       Since x > 0, y has its domain in all real numbers
+    #       By the Chain Rule, df/dy = df/dx * dx/dy
+    #           df/dx = 1 + Ca * Ka / pow(Ka + x, 2) + Kw / pow(x, 2) + (Cb * Kw / Kb) / pow(x + Kw / Kb, 2)
+    #           dx/dy = -ln(10) * pow(10, -y) = -ln(10) * x
+    #       Due constraints x, Ca, Cb, Ka, Kb, Kw > 0 from 3, it can be said that
+    #           df/dx > 1, dx/dy < 0
+    #       Thus df/dy < 0, meaning f(x=pow(10, -y)) strictly decreases regarding, y meaning it only has one solution, and its derivative NEVER equals 0
+    #       From the range of x₀ from 3, it is guaranteed that -1 < y₀ < 15
+    #       If HA is strong: Ca * Ka / pow(Ka + x, 2) reduces to 0
+    #       If B is strong: (Cb * Kw / Kb) / pow(x + Kw / Kb, 2) reduces to 0
+    #   5. Numeric Solution
+    #       Considering the behavior of f, Safeguarded Newton–Raphson method will be used (Quadratic Convergence)
+    # Indicator: -log([In⁻] / [HIn]) = -log(([In⁻] * [H₃O⁺] / [HIn]) / [H₃O⁺]) = pKa - pH, for pKa of indicator acid form
+    # =======================================================
+    # Safeguarded Newton-Raphson method
+    @staticmethod
+    def _safeguarded_newton_raphson_method(
+        f: Callable[[float], float],
+        dfdx: Callable[[float], float],
+        x_low: float, # Lower Bound
+        x_high: float, # Upper Bound
+        max_iter: int = 50, # Max Iteration
+        tol_x: float = 1e-6, # If x moves smaller than this, early return
+        tol_f: float = 1e-10, # If f is smaller than this, early return
+        min_dfdx: float = 1e-12 # Minimal df/dx for Newton's Method
+    ):
+        f_low = f(x_low)
+        f_high = f(x_high)
+        if f_low * f_high > 0:
+            print("Newton's Method Faild: No Solution within Range")
+            return float("nan")
+        # Initial Guess
+        x = (x_low + x_high) / 2
+        for i in range(max_iter):
+            f_val = f(x)
+            dfdx_val = dfdx(x)
+            # Only apply newton's method if dfdx is bigger than min_dfdx
+            if abs(dfdx_val) > min_dfdx: x_newton = x - f_val / dfdx_val
+            else: x_newton = float("nan")
             if (
-                (self.is_released and self.painted_stop_cock_release.containsPoint(event.position(), Qt.WindingFill)) or
-                (not self.is_released and self.painted_stop_cock_hold.containsPoint(event.position(), Qt.WindingFill))
+                not math.isnan(x_newton) and
+                (x_newton > x_low and x_newton < x_high) and
+                abs(x_newton - x) <= 0.5 * (x_high - x_low)
             ):
-                # Make the stopcock look clickable
-                self.setCursor(QCursor(Qt.PointingHandCursor))
+                # Use newton
+                x_new = x_newton
+            else: x_new = 0.5 * (x_low + x_high)
+            
+            f_new = f(x_new)
+            # Update range
+            if f_low * f_new > 0:
+                x_low = x_new
+                f_low = f_new
             else:
-                self.setCursor(QCursor(Qt.ArrowCursor))
-        def mousePressEvent(self, event: QMouseEvent):
-            if not self.painted_stop_cock_release or not self.painted_stop_cock_hold: return
-            if not self.is_released and self.painted_stop_cock_hold.containsPoint(event.position(), Qt.WindingFill):
-                # Hold --> Release
-                self.release_hold_changed.emit(False)
-            elif self.is_released and self.painted_stop_cock_release.containsPoint(event.position(), Qt.WindingFill):
-                # Release --> Hold
-                self.release_hold_changed.emit(True)
-        def release_or_hold(self, release: bool):
-            if release:
-                if self.is_released: return
-                self.is_released = True
-                self.update()
-            else:
-                if not self.is_released: return
-                self.is_released = False
-                self.update()
+                x_high = x_new
+                f_high = f_new
 
-        class TitrationModel():
-            def __init__(self):
-                transform = QTransform()
-                transform.scale(1 / 7.0, -1 / 7.0) # second
-                transform.translate(-0.7, -3.5) # first               
-                self.conical_flask = self.ConicalFlask(transform)
-                self.burette = self.Burette(transform)
-                self.red_screw = self.RedScrew(transform)
-                self.stop_cock_release = self.StopCock(True, transform)
-                self.stop_cock_hold = self.StopCock(False, transform)
-            class ConicalFlask(QPolygonF):
-                def __init__(self, transform: QTransform):
-                    self.transform = transform
-                    self.points = [
-                        QPointF(0.5, 2.1), # 0
-                        QPointF(0.5, 1.6), # 1
-                        QPointF(0.0, 0.0), # 2
-                        QPointF(1.4, 0.0), # 3
-                        QPointF(0.9, 1.6), # 4
-                        QPointF(0.9, 2.1), # 5
-                    ]
-                    super().__init__([transform.map(p) for p in self.points])
-                def water_edge(self, ratio: float) -> QPolygonF:
-                    # 0 <= ratio < 1 as to how much the flask is filled regarding height
-                    return QPolygonF([
-                        self.transform.map(p) for p in
-                        [
-                            self.points[1] * ratio + self.points[2] * (1 - ratio),
-                            self.points[2],
-                            self.points[3],
-                            self.points[4] * ratio + self.points[3] * (1 - ratio),
-                        ]
-                    ])
-            class Burette(QPolygonF):
-                def __init__(self, transform: QTransform):
-                    self.transform = transform
-                    self.points = [
-                        QPointF(0.52, 7.00), # 0
-                        QPointF(0.52, 3.00), # 1
-                        QPointF(0.60, 2.90), # 2
-                        QPointF(0.60, 2.68), # 3
-                        QPointF(0.50, 2.68), # 4
-                        QPointF(0.50, 2.46), # 5
-                        QPointF(0.60, 2.46), # 6
-                        QPointF(0.60, 2.24), # 7
-                        QPointF(0.70, 1.74), # 8
-                        QPointF(0.80, 2.24), # 9
-                        QPointF(0.80, 2.46), # 10
-                        QPointF(0.90, 2.46), # 11
-                        QPointF(0.90, 2.68), # 12
-                        QPointF(0.80, 2.68), # 13
-                        QPointF(0.80, 2.90), # 14
-                        QPointF(0.88, 3.00), # 15
-                        QPointF(0.88, 7.00), # 16
-                    ]
-                    super().__init__([transform.map(p) for p in self.points])
-                def titrant_edge(self, ratio: float, is_released: bool) -> QPolygonF:
-                    # 0 <= ratio < 1 as to how much the burette is filled regarding height
-                    if not is_released:
-                        return QPolygonF([
-                            self.transform.map(p) for p in
-                            [
-                                self.points[0] * ratio + self.points[1] * (1 - ratio),
-                                self.points[1],
-                                self.points[2],
-                                self.points[3],
-                                self.points[13],
-                                self.points[14],
-                                self.points[15],
-                                self.points[16] * ratio + self.points[15] * (1 - ratio),
-                            ]
-                        ])
-                    else:
-                        return QPolygonF([
-                            self.transform.map(p) for p in
-                            [
-                                self.points[0] * ratio + self.points[1] * (1 - ratio),
-                                self.points[1],
-                                self.points[2],
-                                self.points[3],
-                                QPointF(0.68, self.points[3].y()),
-                                self.points[8],
-                                QPointF(0.72, self.points[13].y()),
-                                self.points[13],
-                                self.points[14],
-                                self.points[15],
-                                self.points[16] * ratio + self.points[15] * (1 - ratio),
-                            ]
-                        ])
-            class RedScrew(QPolygonF):
-                def __init__(self, transform: QTransform):
-                    points = [
-                        QPointF(0.35, 2.72), # 0
-                        QPointF(0.35, 2.42), # 1
-                        QPointF(0.50, 2.42), # 2
-                        QPointF(0.50, 2.72), # 3
-                    ] # 2.57
-                    super().__init__([transform.map(p) for p in points])
-            class StopCock(QPolygonF):
-                def __init__(self, is_released: bool, transform: QTransform):
-                    if is_released:
-                        points = [
-                            QPointF(0.90, 2.63), # 0
-                            QPointF(0.90, 2.51), # 1
-                            QPointF(0.98, 2.51), # 2
-                            QPointF(1.06, 2.37), # 3
-                            QPointF(1.22, 2.37), # 4
-                            QPointF(1.22, 2.77), # 5
-                            QPointF(1.06, 2.77), # 6
-                            QPointF(0.98, 2.63), # 7
-                        ] # 2.57
-                        super().__init__([transform.map(p) for p in points])
-                    else:
-                        points = [
-                            QPointF(0.90, 2.63), # 0
-                            QPointF(0.90, 2.51), # 1
-                            QPointF(1.22, 2.51), # 2
-                            QPointF(1.22, 2.63), # 3
-                        ] # 2.57
-                        super().__init__([transform.map(p) for p in points])    
-    class ConfigurationPanel(QWidget):
-        # Signals
-        slider_start_moving_by_user = Signal(bool) # start moving: True, stop moving: false
-        volume_changed = Signal(float) # Emitted everytime slider value changes
-        autotitration_start_stop_changed = Signal() # state should be tracked in main class
-        autotitration_speed_changed = Signal(float) # speed change of autotitration
+            # Early Exit (When i == 0, initial guess matches bisect)
+            if (i != 0 and abs(x_new - x) < tol_x) or abs(f_new) < tol_f: return x_new
+            
+            
+            # Set x to new value
+            x = x_new
+        return x
+    # Returns pH value for given mix
+    @staticmethod
+    def _solve_pH(acid: PureSolution, base: PureSolution) -> float:
+        Ca: float = acid.concentration * acid.volume / (acid.volume + base.volume)
+        Cb: float = base.concentration * base.volume / (acid.volume + base.volume)
+        Ka: float | None = None if not acid.chemical.pK_ else pow(10, -acid.chemical.pK_)
+        Kb: float | None = None if not base.chemical.pK_ else pow(10, -base.chemical.pK_)
+        Kw: float = 1e-14
+
+        def f(y: float) -> float:
+            x = pow(10, -y)
+            A_minus: float = Ca if acid.chemical.is_strong else Ca * Ka / (Ka + x)
+            BH_plus: float = Cb if base.chemical.is_strong else Cb * Kb / (Kb + Kw / x)
+            return x - A_minus - Kw / x + BH_plus
+        def dfdy(y: float) -> float:
+            x = pow(10, -y)
+            dA_minusdy: float = 0 if acid.chemical.is_strong else Ca * Ka / ((Ka + x) * (Ka + x))
+            dBH_plusdy: float = 0 if base.chemical.is_strong else Cb * (Kw / Kb) / ((x + (Kw / Kb)) * (x + (Kw / Kb)))
+            return -math.log1p(10 - 1) * x * (1 + dA_minusdy + Kw / (x * x) + dBH_plusdy)
+        return Simulation._safeguarded_newton_raphson_method(f, dfdy, -1.1, 15.1) # Add 0.1 buffer for extreme values (10M of strong acid/base)
+    def get_pH(self, titrant_volume: float) -> float | None:
+        if not self.config_data: return None
+        if self.config_data.analyte.chemical.is_acid:
+            acid = self.config_data.analyte
+            base = self.config_data.titrant
+            base.volume = titrant_volume
+        else:
+            acid = self.config_data.titrant
+            acid.volume = titrant_volume
+            base = self.config_data.analyte
+        return self._solve_pH(acid, base)
+    def _get_p_In_HIn(self, pH: float, index: int) -> float:
+        # -log([In⁻] / [HIn])
+        indicator = self.config_data.indicators[index]
+        pKa = indicator.pK_ if indicator.is_acid else (14 - indicator.pK_)
+        return pKa - pH
+    def get_current_pH(self) -> float | None: return self.get_pH(self.titrant_volume)
+    # =======================================================
+    # Theoretical Background: Finding Color of Solution by Indicator
+    # To accurately calculate how the color of a solution will change, one should know the full absorbance spectra of the acid and base from of an indicator, daylight, and water
+    # However, such implementation is impractical, thus a scientifically-inaccurate, yet visually acceptable approach is taken
+    # Premise: We assume every light in nature is made out of three wavelengths RGB, and that the absorbance spectra only consists of 3 wavelengths
+    # Scenario: sRGB values (sRa, sGa, sBa) of Acid Color, (sRb, sGb, sBb) of Base Color
+    # Solution:
+    #   All processes are applied equally to each of RGB, so a compact notation of X is used to represent RGB (X := R, G, B)
+    #   Such symmetry also holds for acid and base, thus i represents either a, b (i := a, b)
+    #   1. Normalize sRGB values to values in range 0-1
+    #       nsXi = sXi / 255
+    #   2. Convert sRGB values to linear RGB values
+    #       Due to Gamma Correction of sRGB values, the original linear RGB values can be obtained as such
+    #       Xi = pow(nsXi, 2.2)
+    #   3. Consider linear RGB values as transmission of each wavelength, and convert to absorbance:
+    #       By Absorbance = -log(Transmission),
+    #       AXi = -log(Xi)
+    #   4. Linearly interpolate absorbance based on f = [Indicator Base Form] / [Indicator Acid Form]
+    #       AX = AXa / (1 + f) + AXb * f / (1 + f)
+    #   5. Convert back to transmission (linear RGB): X = pow(10, -AX)
+    #   6. Convert back to sRGB and un-normalize: sX = pow(X, 1 / 2.2) * 255
+    # =======================================================
+    def get_solution_color(self, pH: float, index: int) -> QColor:
+        sRGBa: QColor = self.config_data.indicators[index].acid_color # It is guranteed that there is a color
+        sRGBb: QColor = self.config_data.indicators[index].base_color # It is guranteed that there is a color
+        f = pow(10, -self._get_p_In_HIn(pH, index))
+
+        # Normalize and De-Gamma
+        RGBa: List[float] = [ pow(sRGBa.redF(), 2.2), pow(sRGBa.greenF(), 2.2), pow(sRGBa.blueF(), 2.2) ]
+        RGBb: List[float] = [ pow(sRGBb.redF(), 2.2), pow(sRGBb.greenF(), 2.2), pow(sRGBb.blueF(), 2.2) ]
+
+        # Convert to Absorbance
+        Aa: List[float] = [ -math.log10(X) for X in RGBa ]
+        Ab: List[float] = [ -math.log10(X) for X in RGBb ]
+
+        # Interpolate
+        A: List[float] = [ a / (1 + f) + b * f / (1 + f) for a, b in zip(Aa, Ab) ]
+
+        # Reconvert back to sRGB
+        sRGB: List[int] = [ int(pow(pow(10, -AX), 1 / 2.2) * 255) for AX in A ]
+        return QColor(sRGB[0], sRGB[1], sRGB[2])
         
-        def __init__(self, parent: QWidget):
-            super().__init__(parent)
-            self.setWindowTitle("Configuration Panel")
-            layout = QVBoxLayout()
-            self.simulation_configs = QLabel()
+# =======================================================
+# Manage Chemicals: Manage List of Chemicals Used in App
+# TODO: Add Tool tip to elements
+# =======================================================
 
-            # Horizontal Line
-            line = QFrame()
-            line.setFrameShape(QFrame.HLine)
-            line.setFrameShadow(QFrame.Sunken)
-
-            # Slider
-            info_slider = QLabel("<h2>Drag Slider or CLick Stopcock</h2>")
-            self.slider_titration = QSlider(Qt.Horizontal)
-            # Volume Applied --> same as slider value
-            self.info_volume = QLabel(f"Applied Titrant Volume : 0.00mL")
-            layout_autotitration = QHBoxLayout()
-            # Auto Titration Button
-            self.button_autotitration = QToolButton()
-            self.button_autotitration.setText("Start Autotitration")
-            # Speed section: disabled and enabled depending on autotitration
-            self.info_speed = QLabel("Speed :")
-            self.dspin_speed = self.NoTypingSpinBox()
-            self.dspin_speed.setMinimum(0.0)
-            self.dspin_speed.setValue(0.5)
-            self.dspin_speed.setSingleStep(0.1)
-            self.info_speed_unit = QLabel("mL/s")
-
-            layout_autotitration.addWidget(self.button_autotitration)
-            layout_autotitration.addWidget(self.info_speed)
-            layout_autotitration.addWidget(self.dspin_speed)
-            layout_autotitration.addWidget(self.info_speed_unit)
-
-            layout.addWidget(self.simulation_configs)
-            layout.addWidget(line)
-            layout.addWidget(info_slider)
-            layout.addWidget(self.slider_titration)
-            layout.addWidget(self.info_volume)
-            layout.addLayout(layout_autotitration)
-            self.setLayout(layout)
-
-            # Signals
-            self.slider_titration.sliderPressed.connect(lambda: self.slider_start_moving_by_user.emit(True))
-            self.slider_titration.sliderReleased.connect(lambda: self.slider_start_moving_by_user.emit(False))
-            self.slider_titration.valueChanged.connect(lambda value: self.volume_changed.emit(value / 100))
-            self.button_autotitration.clicked.connect(lambda: self.autotitration_start_stop_changed.emit())
-            self.dspin_speed.valueChanged.connect(self.autotitration_speed_changed.emit)
-        def change_info_volume(self, volume: float):
-            # Change text of added volume label
-            self.info_volume.setText(f"Applied Titrant Volume : {volume:.2f}mL")
-        def change_widgets_for_autotitration_on_off(self, turn_on: bool):
-            if turn_on: self.button_autotitration.setText("Stop Autotitration")
-            else: self.button_autotitration.setText("Start Autotitration")
-        def config(self, config_data: ConfigurationScreen.ConfigData):
-            # Set configuration text
-            self.simulation_configs.setText(f"""
-                <h1>Simulation Configurations</h1>
-                <h2>Analyte</h2>
-                {config_data.analyte.chemical.name}<br>
-                {"Acid" if config_data.analyte.chemical.is_acid else "Base"} ({
-                    "Strong" if config_data.analyte.chemical.is_strong else (
-                        ("K<sub>a</sub>" if config_data.analyte.chemical.is_acid else "K<sub>b</sub>") +
-                        f"={config_data.analyte.chemical.k_val:.2e}"
-                    )
-                })<br>
-                {config_data.analyte.concentration}M<br>
-                {config_data.analyte.volume}mL
-                <h2>Titrant</h2>
-                {config_data.titrant.chemical.name}<br>
-                {"Acid" if config_data.titrant.chemical.is_acid else "Base"} ({
-                    "Strong" if config_data.titrant.chemical.is_strong else (
-                        ("K<sub>a</sub>" if config_data.titrant.chemical.is_acid else "K<sub>b</sub>") +
-                        f"={config_data.titrant.chemical.k_val:.2e}"
-                    )
-                })<br>
-                {config_data.titrant.concentration}M
-                <h2>Indicator</h2>
-                {config_data.indicator.name}
-            """)
-            # Set slider properties
-            self.slider_titration.setMinimum(0)
-            self.slider_titration.setMaximum(10000) # 100 times the real value
-            self.slider_titration.setValue(0)
-        class NoTypingSpinBox(QDoubleSpinBox):
-            # Double spinbox that doesn't typing only arrows
-            def event(self, event):
-                if event.type() == QEvent.KeyPress:
-                    return True  # Block all typing
-                return super().event(event)
-    class CalculationPanel(QTabWidget):
-        def __init__(self, parent: QWidget):
-            super().__init__(parent)
-            self.setWindowTitle("Calculation Panel")
-            self.pH_graph = QLabel("<h1>pH Graph</h1>")
-            self.label_simulator = QLabel("<h1>Simulator Calculations</h1>")
-            self.label_theoretical = QLabel("<h1>Theoretical Calculations</h1>")
-            self.addTab(self.pH_graph, "pH Graph")
-            self.addTab(self.label_simulator, "Simulator")
-            self.addTab(self.label_theoretical, "Theoretical")
-
-# Main Window for App
-class MainWindow(QWidget):
-    def __init__(self):
-        # Init parameters
+# ColorPickerWidget: Wrapper of Color Selection Dialog for Indicator Color Selection
+class ColorPickerWidget(QWidget):
+    def __init__(self, button_text: str, initial: QColor | None = None):
         super().__init__()
-        self.setWindowTitle("Acid-Base Titration Simulator")
-        # self.resize()
+        # self.setWindowTitle("Custom Color Tool")
+        self.selected_color: QColor = QColor("gray") # Default color needed for QColorDialog.getColor
+        self.button_text: str = button_text # Used for title of color selection dialog (Acid/Base Color)
 
-        # Create stacked widget and screens
-        self.stacked_widget = QStackedWidget() # Consider adding transition animation
-        # start_screen = StartScreen()
-        # start_screen.request_next_page.connect(lambda: self.stacked_widget.setCurrentIndex(1))
-        configuration_screen = ConfigurationScreen()
-        configuration_screen.request_next_page.connect(self.__to_simulation_page)
-        self.simulation_screen = SimulationScreen()
-        self.simulation_screen.request_configuration_page.connect(lambda: self.stacked_widget.setCurrentIndex(0))
+        layout = QHBoxLayout(self)
+        button_pick = QToolButton()
+        button_pick.setText(button_text)
+        self.label_pick = QLabel("선택된 색 : 없음")
+        self.color_swatch = QLabel()
+        self.color_swatch.setFixedSize(15, 15)  # Make it a square
+        layout.addWidget(button_pick)
+        layout.addWidget(self.label_pick)
+        layout.addWidget(self.color_swatch)
 
-        # Add screens to stacked widget
-        # self.stacked_widget.addWidget(start_screen)
-        self.stacked_widget.addWidget(configuration_screen)
-        self.stacked_widget.addWidget(self.simulation_screen)
+        # Load default color if it exists
+        if initial:
+            self.selected_color = copy.deepcopy(initial) # Dereference for Initialization by MMP-2
+            self.label_pick.setText(f"선택된 색 : {initial.name()}")
+            self.color_swatch.setStyleSheet(f"background-color: {initial.name()}; border: 1px solid black;") #TODO: Restyle swatch size and QSS
+        
+        # Signals
+        button_pick.clicked.connect(self._choose_color)
+    def _choose_color(self):
+        color: QColor = QColorDialog.getColor(self.selected_color, self, self.button_text) #TODO: getColor language control is not managed: displays system lanaguage - check needed
+        if color.isValid():
+            self.selected_color = color
+            self.label_pick.setText(f"선택된 색 : {color.name()}")
+            self.color_swatch.setStyleSheet(f"background-color: {color.name()}; border: 1px solid black;") #TODO: Restyle swatch size and QSS
+    def get_selected_color(self) -> QColor | None:
+        if self.label_pick.text() == "선택된 색 : 없음": return None # Check manually by string since selected_color is always valid
+        return self.selected_color
 
-        # Add stacked widget to main window
-        layout = QVBoxLayout()
-        layout.addWidget(self.stacked_widget)
-        self.setLayout(layout)
-    def __to_simulation_page(self, config_data: ConfigurationScreen.ConfigData):
-        self.simulation_screen.reload_page(config_data, self.frameGeometry())
-        self.stacked_widget.setCurrentIndex(1)
+# TODO: Get Rid of auto mouse move behavior
+# AddEditChemicalModal: Modal Containing Fields for Individual Chemical Add/Edit
+class AddEditChemicalModal(QDialog):
+    def __init__(
+        self,
+        parent: QWidget,
+        is_indicator: bool,
+        initial: Chemical | None = None, # if exists serves as initial value (edit mode), else (add mode)
+        is_acid: bool = True # is_acid field not used when is_indicator == True
+    ):
+        super().__init__(parent)
+        self.is_indicator: bool = is_indicator
+
+        layout = QVBoxLayout(self)
+        # Name
+        layout_name = QHBoxLayout()
+        layout.addLayout(layout_name)
+        label_name = QLabel("이름 :")
+        self.lineedit_name = QLineEdit()
+        layout_name.addWidget(label_name)
+        layout_name.addWidget(self.lineedit_name)
+        if not is_indicator:
+            # Strength
+            self.is_acid: bool = is_acid
+            layout_strength = QHBoxLayout()
+            layout.addLayout(layout_strength)
+            label_strength = QLabel("세기 :")
+            self.combobox_strength = QComboBox()
+            self.combobox_strength.addItem("선택 안함", None)
+            self.combobox_strength.addItem("강산" if is_acid else "강염기", True)
+            self.combobox_strength.addItem("약산" if is_acid else "약염기", False)
+            layout_strength.addWidget(label_strength)
+            layout_strength.addWidget(self.combobox_strength)
+            self.combobox_strength.currentIndexChanged.connect(self._on_strength_combobox_index_change)
+        else:
+            # Is Acid or not
+            layout_is_acid = QHBoxLayout()
+            layout.addLayout(layout_is_acid)
+            label_is_acid = QLabel("액성")
+            self.combobox_is_acid = QComboBox()
+            self.combobox_is_acid.addItem("선택 안함", None)
+            self.combobox_is_acid.addItem("산성", True)
+            self.combobox_is_acid.addItem("염기성", False)
+            layout_is_acid.addWidget(label_is_acid)
+            layout_is_acid.addWidget(self.combobox_is_acid)
+        # pKa or pKb
+        layout_pK_ = QHBoxLayout()
+        layout.addLayout(layout_pK_)
+        self.label_pK_ = QLabel(
+            "pK<sub>a</sub>/pK<sub>b</sub> :" if is_indicator
+            else ("pK<sub>a</sub> :" if is_acid else "pK<sub>b</sub> :")
+        )
+        self.dspin_pK_ = QDoubleSpinBox()
+        self.dspin_pK_.setRange(0.00, 14.00)
+        self.dspin_pK_.setSingleStep(0.01)
+        self.dspin_pK_.setDecimals(2)
+        layout_pK_.addWidget(self.label_pK_)
+        layout_pK_.addWidget(self.dspin_pK_)
+        self.label_pK_.setEnabled(is_indicator)
+        self.dspin_pK_.setEnabled(is_indicator)
+        # Color selection
+        if is_indicator:
+            if initial:
+                self.select_acid_color = ColorPickerWidget("산성에서의 색 선택", initial.acid_color)
+                self.select_base_color = ColorPickerWidget("염기성에서의 색 선택", initial.base_color)
+            else:
+                self.select_acid_color = ColorPickerWidget("산성에서의 색 선택")
+                self.select_base_color = ColorPickerWidget("염기성에서의 색 선택")
+            layout.addWidget(self.select_acid_color)
+            layout.addWidget(self.select_base_color)
+        # Buttons
+        layout_buttons = QHBoxLayout()
+        layout.addLayout(layout_buttons)
+        button_ok = QPushButton("확인")
+        button_cancel = QPushButton("취소")
+        layout_buttons.addStretch(1)
+        layout_buttons.addWidget(button_ok)
+        layout_buttons.addWidget(button_cancel)
+
+        # Load initial values if it exists
+        if initial:
+            # If we are at edit mode
+            if not is_indicator:
+                self.lineedit_name.setText(initial.name)
+                self.lineedit_name.setReadOnly(True) # Cannot edit name
+                self.combobox_strength.setCurrentIndex(1 if initial.is_strong else 2)
+                if initial.pK_: self.dspin_pK_.setValue(initial.pK_)
+            else:
+                self.lineedit_name.setText(initial.name)
+                self.lineedit_name.setReadOnly(True) # Cannot edit name
+                self.combobox_is_acid.setCurrentIndex(1 if initial.is_acid else 2)
+                self.dspin_pK_.setValue(initial.pK_)
+
+        # Signals
+        button_ok.clicked.connect(self._on_ok_button_click)
+        button_cancel.clicked.connect(self.reject)
+    def _on_strength_combobox_index_change(self, index: int):
+        if index == 2:
+            self.label_pK_.setEnabled(True)
+            self.dspin_pK_.setEnabled(True)
+        else:
+            self.label_pK_.setEnabled(False)
+            self.dspin_pK_.setEnabled(False)
+    def _on_ok_button_click(self):
+        if not self.is_indicator:
+            current_data: bool | None = self.combobox_strength.currentData()
+            if (
+                not self.lineedit_name.text() or
+                current_data == None or
+                (
+                    current_data == False and
+                    self.dspin_pK_.value() == 0.0
+                )
+            ):
+                # Invalid Input
+                #TODO: USER WARNING TO ENTER ALL SELECTIONS
+                print("FILL ALL VALUES")
+                return
+            else: self.accept()
+        else:
+            current_data: bool | None = self.combobox_is_acid.currentData()
+            if (
+                not self.lineedit_name.text() or
+                current_data == None or
+                self.dspin_pK_.value() == 0.0 or
+                not self.select_acid_color.get_selected_color() or
+                not self.select_base_color.get_selected_color()
+            ):
+                # Invalid Input
+                # TODO: USER WARNING TO ENTER ALL SELECTIONS
+                print("FILL ALL VALUES")
+                return
+            else: self.accept()
+    # This is only used for chemical selection (from select button)
+    @staticmethod
+    def get_chemical(
+        parent: QWidget,
+        is_acid: bool,
+        initial: Chemical | None = None
+    ) -> Chemical | None:
+        dialog = AddEditChemicalModal(parent, False, initial, is_acid)
+        if dialog.exec() == QDialog.Accepted:
+            is_strong: bool = dialog.combobox_strength.currentData()
+            return Chemical(
+                dialog.lineedit_name.text(),
+                is_acid,
+                is_strong,
+                None if is_strong else dialog.dspin_pK_.value()
+            )
+        else: return None
+    # This is only used for chemical selection (from select button)
+    @staticmethod
+    def get_indicator(
+        parent: QWidget,
+        initial: Chemical | None = None,
+    ) -> Chemical | None:
+        dialog = AddEditChemicalModal(parent, True, initial)
+        if dialog.exec() == QDialog.Accepted:
+            is_acid: bool = dialog.combobox_is_acid.currentData()
+            return Chemical(
+                dialog.lineedit_name.text(),
+                is_acid,
+                False,
+                dialog.dspin_pK_.value(),
+                dialog.select_acid_color.get_selected_color(),
+                dialog.select_base_color.get_selected_color()
+            )
+        else: return None
+                
+# EditChemicals: Display Predefined/Custom Chemicals and Support Add/Edit/Delete for Latter
+class EditChemicals(QWidget):
+    chemical_selection_changed = Signal() # Emitted when a chemical is selected
+    def __init__(self, simulation_obj: Simulation, chemical_type: ChemicalType):
+        super().__init__()
+        self.simulation_obj: Simulation = simulation_obj
+        self.chemical_type: ChemicalType = chemical_type
+        self.selected_chemical: Chemical | None = None
+
+        layout = QVBoxLayout(self)
+        type_name: str = (
+            "산" if chemical_type == ChemicalType.ACID else (
+                "염기" if chemical_type == ChemicalType.BASE else
+                "지시약"
+            )
+        )
+        #TODO: For indicators, add a visual way of seeing colors --> QSS
+        # Predefined Chemicals
+        groupbox_predefined = QGroupBox(f"미리 정의된 {type_name}")
+        layout.addWidget(groupbox_predefined)
+        layout_predefined = QVBoxLayout(groupbox_predefined)
+        self.table_predefined = QTableWidget() #TODO: Change this to list + stacked widgets
+        self.table_predefined.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch) # Horizontally fills parent
+        layout_predefined.addWidget(self.table_predefined)
+        # Select rows instead of cells
+        self.table_predefined.setSelectionBehavior(QAbstractItemView.SelectRows)
+        # Only select on row
+        self.table_predefined.setSelectionMode(QAbstractItemView.SingleSelection)
+        # Do not trigger edits, the table is immutable on its own
+        self.table_predefined.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table_predefined.setCurrentItem(None) # Default No Selection
+        # Load data
+        if chemical_type != ChemicalType.INDICATOR:
+            self.table_predefined.setColumnCount(3)
+            self.table_predefined.setHorizontalHeaderLabels(["이름", "세기", "pKa" if chemical_type == ChemicalType.ACID else "pKb"])
+            cnt = self.table_predefined.rowCount() # Row count
+            values = simulation_obj.predefined_chemical_library[chemical_type].values()
+            for chemical in values:
+                row_position = cnt
+                self._create_row_chemical(self.table_predefined, row_position, chemical)
+                cnt += 1
+        else:
+            self.table_predefined.setColumnCount(5)
+            self.table_predefined.setHorizontalHeaderLabels(["이름", "액성", "pKa/pKb", "산성에서의 색", "염기성에서의 색"])
+            cnt = self.table_predefined.rowCount() # Row count
+            values = simulation_obj.predefined_chemical_library[ChemicalType.INDICATOR].values()
+            for chemical in values:
+                row_position = cnt
+                self._create_row_indicator(self.table_predefined, row_position, chemical)
+                cnt += 1
+        # Custom Chemicals
+        groupbox_custom = QGroupBox(f"사용자 정의 {type_name}")
+        layout.addWidget(groupbox_custom)
+        layout_custom = QVBoxLayout(groupbox_custom)
+        self.table_custom = QTableWidget()
+        self.table_custom.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch) # Horizontally fills parent
+        layout_custom.addWidget(self.table_custom)
+        # Select rows instead of cells
+        self.table_custom.setSelectionBehavior(QAbstractItemView.SelectRows)
+        # Only select on row
+        self.table_custom.setSelectionMode(QAbstractItemView.SingleSelection)
+        # Do not trigger edits, the table is immutable on its own
+        self.table_custom.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table_custom.setCurrentItem(None) # Default No Selection
+        # Load data
+        if chemical_type != ChemicalType.INDICATOR:
+            self.table_custom.setColumnCount(3)
+            self.table_custom.setHorizontalHeaderLabels(["이름", "세기", "pKa" if chemical_type == ChemicalType.ACID else "pKb"])
+            cnt = self.table_custom.rowCount() # Row count
+            values = simulation_obj.custom_chemical_library[chemical_type].values()
+            for chemical in values:
+                row_position = cnt
+                self._create_row_chemical(self.table_custom, row_position, chemical)                        
+                cnt += 1
+        else:
+            self.table_custom.setColumnCount(5)
+            self.table_custom.setHorizontalHeaderLabels(["이름", "액성", "pKa/pKb", "산성에서의 색", "염기성에서의 색"])
+            cnt = self.table_custom.rowCount() # Row count
+            values = simulation_obj.custom_chemical_library[ChemicalType.INDICATOR].values()
+            for chemical in values:
+                row_position = cnt
+                self._create_row_indicator(self.table_custom, row_position, chemical)
+                cnt += 1
+        # Add / Edit / Delete Buttons
+        layout_buttons_custom = QHBoxLayout()
+        layout_custom.addLayout(layout_buttons_custom)
+        self.button_add = QPushButton("추가")
+        self.button_edit = QPushButton("수정")
+        self.button_delete = QPushButton("삭제")
+        self.button_add.setAutoDefault(False) # Disables any default behavior
+        self.button_edit.setAutoDefault(False) # Disables any default behavior
+        self.button_delete.setAutoDefault(False) # Disables any default behavior
+        layout_buttons_custom.addStretch(1)
+        layout_buttons_custom.addWidget(self.button_add)
+        layout_buttons_custom.addWidget(self.button_edit)
+        layout_buttons_custom.addWidget(self.button_delete)
+        self.button_edit.setEnabled(False)
+        self.button_delete.setEnabled(False)
+
+        # Signals
+        # Open selection modal on handle double click
+        self.table_custom.itemDoubleClicked.connect(self._on_item_edit)
+        # On button clicks
+        self.button_add.clicked.connect(self._on_add_button_click)
+        self.button_edit.clicked.connect(self._on_edit_button_click)
+        self.button_delete.clicked.connect(self._on_delete_button_click)
+        # Allow only one table to be selected at one time
+        self.table_predefined.itemClicked.connect(self._on_table_predefined_click)
+        self.table_custom.itemClicked.connect(self._on_table_custom_click)
+    @staticmethod
+    def _create_row_chemical(table: QTableWidget, row: int, chemical: Chemical):
+        table.insertRow(row)
+        table.setItem(row, 0, QTableWidgetItem(chemical.name))
+        table.setItem(row, 1, QTableWidgetItem(("강" if chemical.is_strong else "약") + ("산" if chemical.is_acid else "염기")))
+        if chemical.pK_: table.setItem(row, 2, QTableWidgetItem(f"{chemical.pK_:.2f}"))
+        else: table.setItem(row, 2, QTableWidgetItem(""))
+        # Alignment
+        table.item(row, 0).setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        table.item(row, 1).setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        table.item(row, 2).setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        # Add data to first item
+        table.item(row, 0).setData(Qt.UserRole, chemical) # Reference Passed Directly by MMP-1
+    @staticmethod
+    def _create_row_indicator(table: QTableWidget, row: int, indicator: Chemical):
+        table.insertRow(row)
+        table.setItem(row, 0, QTableWidgetItem(indicator.name))
+        table.setItem(row, 1, QTableWidgetItem("산" if indicator.is_acid else "염기"))
+        table.setItem(row, 2, QTableWidgetItem(f"{indicator.pK_:.2f}"))
+        # TODO: Add color indicating --> perhaps by qss
+        table.setItem(row, 3, QTableWidgetItem(f"{indicator.acid_color.name()}"))
+        table.setItem(row, 4, QTableWidgetItem(f"{indicator.base_color.name()}"))
+        # Alignment
+        table.item(row, 0).setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        table.item(row, 1).setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        table.item(row, 2).setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        table.item(row, 3).setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        table.item(row, 4).setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+        # Add data to first item
+        table.item(row, 0).setData(Qt.UserRole, indicator) # Reference Passed Directly by MMP-1
+    @staticmethod
+    def _make_key(name: str) -> str: return name.upper().replace(" ", "_")
+    def _on_table_predefined_click(self):
+        current_row = self.table_predefined.currentRow()
+        if current_row != -1:
+            # Retrieve data stored in column 0
+            self.selected_chemical = self.table_predefined.item(current_row, 0).data(Qt.UserRole)
+            self.table_custom.clearSelection()
+            self.button_edit.setEnabled(False)
+            self.button_delete.setEnabled(False)
+            self.chemical_selection_changed.emit()
+    def _on_table_custom_click(self):
+        current_row = self.table_custom.currentRow()
+        if current_row != -1:
+            # Retrieve data stored in column 0
+            self.selected_chemical = self.table_custom.item(current_row, 0).data(Qt.UserRole)
+            self.table_predefined.clearSelection()
+            self.button_edit.setEnabled(True)
+            self.button_delete.setEnabled(True)
+            self.chemical_selection_changed.emit()
+    def _on_add_button_click(self):
+        if self.chemical_type == ChemicalType.ACID:
+            new_acid = AddEditChemicalModal.get_chemical(self, True)
+            if not new_acid: return
+            else:
+                row_position = self.table_custom.rowCount()
+                self._create_row_chemical(self.table_custom, row_position, new_acid)
+                self.table_custom.selectRow(row_position)
+                self._on_table_custom_click()
+                # Add to custom library: passed by reference by MMP-1
+                self.simulation_obj.custom_chemical_library[ChemicalType.ACID].update({self._make_key(new_acid.name): new_acid})
+        elif self.chemical_type == ChemicalType.BASE:
+            new_base = AddEditChemicalModal.get_chemical(self, False)
+            if not new_base: return
+            else:
+                row_position = self.table_custom.rowCount()
+                self._create_row_chemical(self.table_custom, row_position, new_base)
+                self.table_custom.selectRow(row_position)
+                self._on_table_custom_click()
+                # Add to custom library: passed by reference by MMP-1
+                self.simulation_obj.custom_chemical_library[ChemicalType.BASE].update({self._make_key(new_base.name): new_base})
+        else:
+            # Indicator
+            new_indicator = AddEditChemicalModal.get_indicator(self)
+            if not new_indicator: return
+            else:
+                row_position = self.table_custom.rowCount()
+                self._create_row_indicator(self.table_custom, row_position, new_indicator)
+                self.table_custom.selectRow(row_position)
+                self._on_table_custom_click()
+                # Add to custom library: passed by reference by MMP-1
+                self.simulation_obj.custom_chemical_library[ChemicalType.INDICATOR].update({self._make_key(new_indicator.name): new_indicator})
+    def _on_edit_button_click(self):
+        # Predefined elements cannot be edited
+        if self.table_predefined.currentRow() != -1: return
+        row_position = self.table_custom.currentRow()
+        # The name of chemical is not-editable
+        # Newly made chemicals from edit are discarded, while the original object is edited by MMP-1
+        # Custom library and row data reference the current_chemical, so not edit of reference needed
+        current_chemical: Chemical = self.table_custom.item(row_position, 0).data(Qt.UserRole)
+        if self.chemical_type == ChemicalType.ACID:
+            edited_acid = AddEditChemicalModal.get_chemical(self, True, current_chemical)
+            if not edited_acid: return
+            else:
+                current_chemical.is_strong = edited_acid.is_strong
+                current_chemical.pK_ = edited_acid.pK_
+                self.table_custom.item(row_position, 1).setText(("강" if current_chemical.is_strong else "약") + ("산" if current_chemical.is_acid else "염기"))
+                if current_chemical.pK_: self.table_custom.item(row_position, 2).setText(f"{current_chemical.pK_:.2f}")
+        elif self.chemical_type == ChemicalType.BASE:
+            edited_base = AddEditChemicalModal.get_chemical(self, False, current_chemical)
+            if not edited_base: return
+            else:
+                current_chemical.is_strong = edited_base.is_strong
+                current_chemical.pK_ = edited_base.pK_
+                self.table_custom.item(row_position, 1).setText(("강" if current_chemical.is_strong else "약") + ("산" if current_chemical.is_acid else "염기"))
+                if current_chemical.pK_: self.table_custom.item(row_position, 2).setText(f"{current_chemical.pK_:.2f}")
+        else:
+            # Indicator
+            edited_indicator = AddEditChemicalModal.get_indicator(self, current_chemical)
+            if not edited_indicator: return
+            else:
+                current_chemical.is_acid = edited_indicator.is_acid
+                current_chemical.pK_ = edited_indicator.pK_
+                # Since not direct memeber of a class the reference for color is changed by MMP-1
+                current_chemical.acid_color = edited_indicator.acid_color
+                current_chemical.base_color = edited_indicator.base_color
+                self.table_custom.item(row_position, 1).setText("산" if current_chemical.is_acid else "염기")
+                self.table_custom.item(row_position, 2).setText(f"{current_chemical.pK_:.2f}")
+                #TODO: Add color indicating --> perhaps by QSS
+                self.table_custom.item(row_position, 3).setText(f"{current_chemical.acid_color.name()}")
+                self.table_custom.item(row_position, 4).setText(f"{current_chemical.base_color.name()}")
+    def _on_item_edit(self, _: QTableWidgetItem): self._on_edit_button_click()
+    def _on_delete_button_click(self):
+        # Predefined elements cannot be deleted
+        if self.table_predefined.currentRow() != -1: return
+        row_position = self.table_custom.currentRow()
+        current_chemical: Chemical = self.table_custom.item(row_position, 0).data(Qt.UserRole)
+        self.simulation_obj.custom_chemical_library[self.chemical_type].pop(self._make_key(current_chemical.name))
+        self.table_custom.removeRow(row_position)
+        self.table_custom.clearSelection()
+        self.button_edit.setEnabled(False)
+        self.button_delete.setEnabled(False)
+        # Disable Selection
+        self.selected_chemical = None
+        self.chemical_selection_changed.emit()
+
+# ManageSelectChemicalsModal: Modal Chat Allows Managing and Selecting Chemicals
+class ManageSelectChemicalsModal(QDialog):
+    def __init__(
+        self,
+        parent: QWidget,
+        simulation_obj: Simulation,
+        enable_select: bool,
+        enable_acid: bool,
+        enable_base: bool,
+        enable_indicator: bool
+    ):
+        # enable_select: True enables final selection ok, if False, the final Cancel button and selection label is removed
+        # enable_acid/base/indicator enables their tabs
+        super().__init__(parent)
+        self.simulation_obj: Simulation = simulation_obj     
+        self.enable_select: bool = enable_select  
+        self.setWindowTitle("물질 선택" if enable_select else "물질 추가/제거")
+        self.setModal(True)
+
+        # self.setGeometry --> #TODO: Set position
+        layout = QVBoxLayout(self)
+        self.tab_widget = QTabWidget()
+        layout.addWidget(self.tab_widget)
+        # TODO: Couldn't find a way to not rotate text
+        # self.tab_widget.setTabPosition(QTabWidget.West) # Set tabs to left
+        editchemicals_acid = EditChemicals(simulation_obj, ChemicalType.ACID)
+        editchemicals_base = EditChemicals(simulation_obj, ChemicalType.BASE)
+        editchemicals_indicator = EditChemicals(simulation_obj, ChemicalType.INDICATOR)
+        self.tab_widget.addTab(editchemicals_acid, "산")
+        self.tab_widget.addTab(editchemicals_base, "염기")
+        self.tab_widget.addTab(editchemicals_indicator, "지시약")
+        # Enable/Disable tab
+        self.tab_widget.setTabEnabled(0, enable_acid)
+        self.tab_widget.setTabEnabled(1, enable_base)
+        self.tab_widget.setTabEnabled(2, enable_indicator)
+
+        # Selection and OK/Cancel Buttons
+        layout_selection_and_buttons = QHBoxLayout()
+        layout.addLayout(layout_selection_and_buttons)
+        self.label_selected_chemical = QLabel("선택된 물질 : 없음")
+        if not enable_select: self.label_selected_chemical.hide() # Show only for selection mode
+        self.button_ok = QPushButton("확인")
+        self.button_ok.setEnabled(not enable_select) # Initial disablement since no chemical is selected
+        button_cancel = QPushButton("취소")
+        layout_selection_and_buttons.addStretch(1) # Left shift all contents
+        layout_selection_and_buttons.addWidget(self.label_selected_chemical)
+        layout_selection_and_buttons.addWidget(self.button_ok)
+        layout_selection_and_buttons.addWidget(button_cancel)
+        if not enable_select: button_cancel.hide() # Cancel not needed if not selection mode
+
+        # Signals
+        editchemicals_acid.chemical_selection_changed.connect(self._on_chemical_select_status_change)
+        editchemicals_base.chemical_selection_changed.connect(self._on_chemical_select_status_change)
+        editchemicals_indicator.chemical_selection_changed.connect(self._on_chemical_select_status_change)
+        self.tab_widget.currentChanged.connect(self._on_current_tab_change)
+        self.button_ok.clicked.connect(self.accept)
+        button_cancel.clicked.connect(self.reject)
+    def _get_selected_chemical(self) -> Chemical | None:
+        current_widget: EditChemicals = self.tab_widget.currentWidget()
+        return current_widget.selected_chemical
+    def _update_ok_button_enabled(self):
+        # If there is no selected chemical ok should be disabled
+        if self.enable_select: self.button_ok.setEnabled(not not self._get_selected_chemical())
+    def _on_chemical_select_status_change(self):
+        self.label_selected_chemical.setText(f"선택된 물질 : {"없음" if not self._get_selected_chemical() else self._get_selected_chemical().name}")
+        self._update_ok_button_enabled()
+    def _on_current_tab_change(self, _: int):
+        self._on_chemical_select_status_change()
+    @staticmethod
+    def manage_chemicals(
+        parent: QWidget,
+        simulation_obj: Simulation,
+        enable_acid: bool,
+        enable_base: bool,
+        enable_indicator: bool
+    ):
+        # This is only used to manage chemicals (from menubar)
+        dialog = ManageSelectChemicalsModal(parent, simulation_obj, False, enable_acid, enable_base, enable_indicator)
+        dialog.exec()
+    def get_chemical(
+        parent: QWidget,
+        simulation_obj: Simulation,
+        enable_acid: bool,
+        enable_base: bool,
+        enable_indicator: bool
+    ) -> Chemical | None:
+        # This is only used for chemical selection (from select button)
+        dialog = ManageSelectChemicalsModal(parent, simulation_obj, True, enable_acid, enable_base, enable_indicator)
+        if dialog.exec() == QDialog.Accepted: return dialog._get_selected_chemical()
+        else: return None
+
+# =======================================================
+# Configuration: Getting Configs for Simulation
+# =======================================================
+
+# DynamicIndicatorListEntry: Entry Containing Indicator Info for DynamicIndicatorList 
+class DynamicIndicatorListEntry(QWidget):
+    # Entries for the list
+    def __init__(self, indicator: Chemical, remove_callback: Callable[[DynamicIndicatorListEntry], None]):
+        super().__init__()
+        self.remove_callback: Callable[[DynamicIndicatorListEntry], None] = remove_callback
+        self.indicator: Chemical = indicator # Stores a reference by MMP-1
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        # Set indicator info and X symbol for remove
+        label = QLabel(f"{indicator.name}, pK<sub>{"a" if indicator.is_acid else "b"}</sub>={indicator.pK_:.2f}")
+        self.button_remove = QToolButton()
+        self.button_remove.setText("✕") #TODO: Replace with icon
+        self.button_remove.setFixedWidth(30)
+        self.button_remove.clicked.connect(lambda: self.remove_callback(self))
+        layout.addWidget(label)
+        layout.addStretch(1)
+        layout.addWidget(self.button_remove)
+    def set_read_only(self, read_only: bool): self.button_remove.setEnabled(not read_only)
+
+# DynamicIndicatorList: List Allowing Selection of Indicators up to a Maximum Number
+class DynamicIndicatorList(QWidget):
+    def __init__(self, simulation_obj: Simulation, MAX_ENTRIES: int):
+        super().__init__()
+        self.simulation_obj: Simulation = simulation_obj
+        self.MAX_ENTRIES: int = MAX_ENTRIES
+        self.entries: List[DynamicIndicatorListEntry] = []
+        self.indicators: List[Chemical] = []
+
+        self.list_layout = QVBoxLayout(self)
+        # Add + button always at bottom
+        self.button_plus = QPushButton("+ 지시약 추가하기")
+        self.list_layout.addWidget(self.button_plus)
+        self.update_plus_visibility()
+
+        # Signals
+        self.button_plus.clicked.connect(self.add_entry)
+    def add_entry(self):
+        if len(self.entries) >= self.MAX_ENTRIES: return
+        indicator = ManageSelectChemicalsModal.get_chemical(self, self.simulation_obj, False, False, True)
+        if not indicator: return
+        # Add indicator to lists
+        entry = DynamicIndicatorListEntry(indicator, self.remove_entry)
+        self.list_layout.insertWidget(len(self.entries), entry)
+        self.entries.append(entry)
+        self.update_plus_visibility()
+        self.indicators.append(indicator)
+    def remove_entry(self, entry_widget: DynamicIndicatorListEntry):
+        self.indicators.remove(entry_widget.indicator)
+        self.entries.remove(entry_widget)
+        entry_widget.setParent(None) # Remove parent
+        entry_widget.deleteLater() # Schedule delete
+        self.update_plus_visibility()
+    def clear_entries(self):
+        # Clear all entries
+        while len(self.entries) > 0:
+            entry = self.entries[0]
+            self.remove_entry(entry)
+    # The plus button disappears when max entry is reached
+    def update_plus_visibility(self):
+        if len(self.entries) < self.MAX_ENTRIES: self.button_plus.show()
+        else: self.button_plus.hide()
+    def set_read_only(self, read_only: bool):
+        for entry in self.entries: entry.set_read_only(read_only)
+        self.button_plus.setEnabled(not read_only)
+
+# TODO: Why does space button trigger submit?
+# TODO: Indicator might get edited after add --> handle exception
+# ConfigurationPanel: Panel on Left for Simulation Configuration
+class ConfigurationPanel(QWidget):
+    MAX_INDICATOR_NUM = 3
+    is_running_simulation_changed = Signal(bool) # True: start running, False: stop running
+    # Panel that contains all configuration data
+    def __init__(self, simulation_obj: Simulation):
+        super().__init__()
+        self.simulation_obj: Simulation = simulation_obj
+        self.selected_analyte: Chemical | None = None
+        self.selected_titrant: Chemical | None = None
+        self.is_simulation_running: bool = False
+        self.setFixedWidth(300) #TODO: Fix Width
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10) # Vertical Gap
+
+        # Choose analyte/titrant and their concentration, volume
+        groupbox_config = QGroupBox("적정 상황을 선택하세요")
+        layout.addWidget(groupbox_config)
+        layout_groupbox_config = QVBoxLayout(groupbox_config)
+        layout_groupbox_config.setContentsMargins(12, 8, 12, 8)
+        layout_groupbox_config.setSpacing(4)
+
+        # Select analyate and display its properties
+        layout_analyte_choose = QHBoxLayout()
+        label_analyte_tag = QLabel("분석액 :")
+        label_analyte_tag.setToolTip("분석액(Analyte): 농도 분석을 할 물질")
+        self.label_analyte = QLabel("—") # Displays name #TODO: QSS Value Display
+        self.button_analyte_choose = QToolButton()
+        self.button_analyte_choose.setText("선택")
+        layout_analyte_choose.addWidget(label_analyte_tag)
+        layout_analyte_choose.addWidget(self.label_analyte)
+        layout_analyte_choose.addWidget(self.button_analyte_choose)
+        layout_groupbox_config.addLayout(layout_analyte_choose)
+
+        layout_analyte_info = QHBoxLayout()
+        label_analyte_info_tag = QLabel("특징 :") # Displays acid/base, strength, and pKa/b if possible
+        label_analyte_info_tag.setToolTip("분석액 액성(산성/염기성), 세기(강/약), 해리상수(pK<sub>a</sub>/pK<sub>b</sub>)")
+        self.label_analyte_info = QLabel("—") #TODO: QSS Value Display
+        layout_analyte_info.addWidget(label_analyte_info_tag)
+        layout_analyte_info.addWidget(self.label_analyte_info)
+        layout_groupbox_config.addLayout(layout_analyte_info)
+
+        # Concentration and Volume of Analyte
+        layout_analyte_concentration = QHBoxLayout()
+        label_analyte_concentration_tag = QLabel("농도 :")
+        label_analyte_concentration_tag.setToolTip("분석액 농도(M)")
+        self.dspin_analyte_concentration = QDoubleSpinBox()
+        self.dspin_analyte_concentration.setRange(0.01, 10.00)
+        self.dspin_analyte_concentration.setSingleStep(0.01)
+        self.dspin_analyte_concentration.setDecimals(2)
+        self.dspin_analyte_concentration.setSuffix(" M")
+        self.dspin_analyte_concentration.setValue(1.00) # Default of 1.00M
+        layout_analyte_concentration.addWidget(label_analyte_concentration_tag)
+        layout_analyte_concentration.addWidget(self.dspin_analyte_concentration)
+        layout_groupbox_config.addLayout(layout_analyte_concentration)
+
+        layout_analyte_volume = QHBoxLayout()
+        label_analyte_volume_tag = QLabel("부피 :")
+        label_analyte_volume_tag.setToolTip("분석액 부피(mL)")
+        self.dspin_analyte_volume = QDoubleSpinBox()
+        self.dspin_analyte_volume.setRange(10, 500)
+        self.dspin_analyte_volume.setDecimals(0)
+        self.dspin_analyte_volume.setSingleStep(1)
+        self.dspin_analyte_volume.setSuffix(" mL")
+        layout_analyte_volume.addWidget(label_analyte_volume_tag)
+        layout_analyte_volume.addWidget(self.dspin_analyte_volume)
+        layout_groupbox_config.addLayout(layout_analyte_volume)
+
+        # Select titrant and display its properties
+        layout_titrant_choose = QHBoxLayout()
+        label_titrant_choose = QLabel("적정액 :")
+        label_titrant_choose.setToolTip("적정액(Titrant): 농도 분석을 위한 표준용액")
+        self.label_titrant = QLabel("—") #TODO: QSS Value Display
+        self.button_titrant_choose = QToolButton()
+        self.button_titrant_choose.setText("선택") #TODO: Add fixed width
+        layout_titrant_choose.addWidget(label_titrant_choose)
+        layout_titrant_choose.addWidget(self.label_titrant)
+        layout_titrant_choose.addWidget(self.button_titrant_choose)
+        layout_groupbox_config.addLayout(layout_titrant_choose)
+
+        layout_titrant_info = QHBoxLayout()
+        label_titrant_info_tag = QLabel("특징 :") # Displays acid/base, strength, and pKa/b if possible
+        label_titrant_info_tag.setToolTip("적정액 액성(산성/염기성), 세기(강/약), 해리상수(pK<sub>a</sub>/pK<sub>b</sub>)")
+        self.label_titrant_info = QLabel("—") #TODO: QSS Value Display
+        layout_titrant_info.addWidget(label_titrant_info_tag)
+        layout_titrant_info.addWidget(self.label_titrant_info)
+        layout_groupbox_config.addLayout(layout_titrant_info)
+
+        # Concentration and Volume of Titrant
+        layout_titrant_concentration = QHBoxLayout()
+        label_titrant_concentration_tag = QLabel("농도 :")
+        label_titrant_concentration_tag.setToolTip("적정액 농도(M)")
+        self.dspin_titrant_concentration = QDoubleSpinBox()
+        self.dspin_titrant_concentration.setRange(0.01, 10.00)
+        self.dspin_titrant_concentration.setSingleStep(0.01)
+        self.dspin_titrant_concentration.setDecimals(2)
+        self.dspin_titrant_concentration.setSuffix(" M")
+        self.dspin_titrant_concentration.setValue(1.00) # Default 1.00M
+        layout_titrant_concentration.addWidget(label_titrant_concentration_tag)
+        layout_titrant_concentration.addWidget(self.dspin_titrant_concentration)
+        layout_groupbox_config.addLayout(layout_titrant_concentration)
+        
+        # Choose indicator
+        groupbox_indicator = QGroupBox("지시약을 선택하세요")
+        layout.addWidget(groupbox_indicator)
+        layout_groupbox_config = QVBoxLayout(groupbox_indicator)
+        layout_groupbox_config.setContentsMargins(12, 8, 12, 8)
+        layout_groupbox_config.setSpacing(4)
+
+        self.indicator_list = DynamicIndicatorList(self.simulation_obj, self.MAX_INDICATOR_NUM)
+        layout_groupbox_config.addWidget(self.indicator_list)
+        
+        # Buttons for clear and submit
+        layout_buttons = QHBoxLayout()
+        self.button_reset = QPushButton("초기화 ⟲") #TODO: Set readonly when simulation is on
+        self.button_reset.setToolTip("모든 선택 사항 초기화")
+        self.button_submit = QPushButton("시뮬레이션 시작 →")
+        self.button_submit.setToolTip("모든 설정 사항 제출 및 시뮬레이션 시작")
+        layout_buttons.addWidget(self.button_reset)
+        layout_buttons.addWidget(self.button_submit)
+        layout.addLayout(layout_buttons)
+        #TODO: Add spacing and size
+        layout.addStretch(1) # All elements above do not expand vertically
+        
+        # Signals
+        self.button_analyte_choose.clicked.connect(self._on_analyte_choose_button_click)
+        self.button_titrant_choose.clicked.connect(self._on_titrant_choose_button_click)
+        self.button_reset.clicked.connect(self._on_reset_button_click)
+        self.button_submit.clicked.connect(self._on_submit_button_click)
+    def get_config_data(self) -> SimulationConfigData | None:
+        if (
+            not self.selected_analyte or
+            not self.selected_titrant or
+            not self.indicator_list.indicators or
+            self.selected_analyte.is_acid == self.selected_titrant.is_acid
+        ):
+            return None
+        return SimulationConfigData(
+            PureSolution(
+                self.selected_analyte,
+                self.dspin_analyte_concentration.value(),
+                self.dspin_analyte_volume.value()
+            ),
+            PureSolution(
+                self.selected_titrant,
+                self.dspin_titrant_concentration.value()
+            ),
+            self.indicator_list.indicators
+        )
+    def _on_analyte_choose_button_click(self):
+        enable_acid = enable_base = True
+        if self.selected_titrant:
+            # Disable the selection of chemical type the other side already chose
+            if self.selected_titrant.is_acid: enable_acid = False
+            else: enable_base = False
+        analyte = ManageSelectChemicalsModal.get_chemical(self, self.simulation_obj, enable_acid, enable_base, False)
+        # If no chemical is selected return
+        if not analyte: return
+        self.selected_analyte = analyte
+        # Display properties of selection
+        self.label_analyte.setText(self.selected_analyte.name)
+        if self.selected_analyte.is_acid:
+            if self.selected_analyte.is_strong: self.label_analyte_info.setText("강산")
+            else: self.label_analyte_info.setText(f"약산(pK<sub>a</sub>={self.selected_analyte.pK_})")
+        else:
+            if self.selected_analyte.is_strong: self.label_analyte_info.setText("강염기")
+            else: self.label_analyte_info.setText(f"약염기(pK<sub>b</sub>={self.selected_analyte.pK_})")
+    def _on_titrant_choose_button_click(self):
+        enable_acid = enable_base = True
+        if self.selected_analyte:
+            # Disable the selection of chemical type the other side already chose
+            if self.selected_analyte.is_acid: enable_acid = False
+            else: enable_base = False
+        titrant = ManageSelectChemicalsModal.get_chemical(self, self.simulation_obj, enable_acid, enable_base, False)
+        # If no chemical is selected return
+        if not titrant: return
+        self.selected_titrant = titrant
+        # Display properties of selection
+        self.label_titrant.setText(self.selected_titrant.name)
+        if self.selected_titrant.is_acid:
+            if self.selected_titrant.is_strong: self.label_titrant_info.setText("강산")
+            else: self.label_titrant_info.setText(f"약산(pK<sub>a</sub>={self.selected_titrant.pK_})")
+        else:
+            if self.selected_titrant.is_strong: self.label_titrant_info.setText("강염기")
+            else: self.label_titrant_info.setText(f"약염기(pK<sub>b</sub>={self.selected_titrant.pK_})")
+    def _set_readonly_and_change_submit_button(self, is_started: bool):
+        # If is_started == True, readOnly=True, else readOnly=False with text changing
+        self.button_analyte_choose.setEnabled(not is_started)
+        self.button_titrant_choose.setEnabled(not is_started)
+        self.dspin_analyte_concentration.setReadOnly(is_started)
+        self.dspin_titrant_concentration.setReadOnly(is_started)
+        self.dspin_analyte_volume.setReadOnly(is_started)
+        self.indicator_list.set_read_only(is_started)
+        self.button_reset.setEnabled(not is_started)
+        self.button_submit.setText("시뮬레이션 시작 →" if not is_started else "시뮬레이션 종료")
+        self.button_submit.setToolTip("모든 설정 사항 제출 및 시뮬레이션 시작" if not is_started else "시뮬레이션 종료")
+    def _on_submit_button_click(self):
+        # VERY IMPORTANT: Entry Point to Simulation
+        if self.is_simulation_running:
+            self.is_simulation_running = False
+            self._set_readonly_and_change_submit_button(False)
+            self.simulation_obj.end()
+            self.is_running_simulation_changed.emit(False)
+        else:
+            config_data = self.get_config_data()
+            if not config_data:
+                #TODO: ADD USER WARNING
+                print("Invalid Simulation Config")
+                return
+            self.is_simulation_running = True
+            self._set_readonly_and_change_submit_button(True)
+            self.simulation_obj.start(config_data)
+            self.is_running_simulation_changed.emit(True)
+    def _on_reset_button_click(self):
+        # Remove analyte + titrant
+        self.selected_analyte = None
+        self.selected_titrant = None
+        self.label_analyte.setText("—")
+        self.label_analyte_info.setText("—")
+        self.label_titrant.setText("—")
+        self.label_titrant_info.setText("—")
+        self.dspin_analyte_concentration.setValue(1.00)
+        self.dspin_analyte_volume.setValue(10)
+        self.dspin_titrant_concentration.setValue(1.00)
+        # Remove indicators
+        self.indicator_list.clear_entries()
+   
+# =======================================================
+# Titrant Volume: Autotitration and User-Control
+# =======================================================
+
+# TitrantVolumeManager: Synchronizes Auotitration Start/Stop and User Control over Titrnat Volume
+class TitrantVolumeManager(QObject):
+    # Widgets should first set internal variables then emit the signal
+    is_user_moving_slider_changed = Signal() # When user moving slider state changes
+    is_autotitration_on_changed = Signal() # When autotitration state changes
+    current_volume_changed = Signal() # Emits when volume is changed
+    timer_timeout = Signal() # called when timer timeouted
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.is_autotitration_on: bool = False
+        self.is_user_moving_slider: bool = False
+        # Timer for Autotitration
+        self.timer = QTimer(parent)
+        # Signals
+        self.timer.timeout.connect(self.timer_timeout.emit)
+    def start_simulation(self):
+        self.is_autotitration_on = False
+        self.is_user_moving_slider = False
+    def end_simulation(self):
+        self.timer.stop()
+        self.is_autotitration_on = False
+        self.is_autotitration_on_changed.emit()
+
+# =======================================================
+# Experiment Visuals: Visualization of Experiment
+# =======================================================
+
+# TitrationModelFactory: Creates 2D Model for Visuals
+class TitrationModelFactory():
+    POINTS_CONICAL_FLASK: List[QPointF] = [
+        QPointF(0.5, 2.1), # 0
+        QPointF(0.5, 1.6), # 1
+        QPointF(0.0, 0.0), # 2
+        QPointF(1.4, 0.0), # 3
+        QPointF(0.9, 1.6), # 4
+        QPointF(0.9, 2.1), # 5
+    ]
+    POINTS_BURETTE: List[QPointF] = [
+        QPointF(0.52, 7.00), # 0
+        QPointF(0.52, 3.00), # 1
+        QPointF(0.60, 2.90), # 2
+        QPointF(0.60, 2.68), # 3
+        QPointF(0.50, 2.68), # 4
+        QPointF(0.50, 2.46), # 5
+        QPointF(0.60, 2.46), # 6
+        QPointF(0.60, 2.24), # 7
+        QPointF(0.70, 1.74), # 8
+        QPointF(0.80, 2.24), # 9
+        QPointF(0.80, 2.46), # 10
+        QPointF(0.90, 2.46), # 11
+        QPointF(0.90, 2.68), # 12
+        QPointF(0.80, 2.68), # 13
+        QPointF(0.80, 2.90), # 14
+        QPointF(0.88, 3.00), # 15
+        QPointF(0.88, 7.00), # 16
+    ]
+    POINTS_RED_SCREW: List[QPointF] = [
+        QPointF(0.35, 2.72), # 0
+        QPointF(0.35, 2.42), # 1
+        QPointF(0.50, 2.42), # 2
+        QPointF(0.50, 2.72), # 3
+    ]
+    POINTS_STOPCOCK_RELEASE: List[QPointF] = [
+        QPointF(0.90, 2.63), # 0
+        QPointF(0.90, 2.51), # 1
+        QPointF(0.98, 2.51), # 2
+        QPointF(1.06, 2.37), # 3
+        QPointF(1.22, 2.37), # 4
+        QPointF(1.22, 2.77), # 5
+        QPointF(1.06, 2.77), # 6
+        QPointF(0.98, 2.63), # 7
+    ]
+    POINTS_STOPCOCK_HOLD: List[QPointF] = [
+        QPointF(0.90, 2.63), # 0
+        QPointF(0.90, 2.51), # 1
+        QPointF(1.22, 2.51), # 2
+        QPointF(1.22, 2.63), # 3
+    ] 
+
+    def __init__(self):
+        self._transform = QTransform()
+        self._transform.scale(1 / 7.0, -1 / 7.0) # second
+        self._transform.translate(-0.7, -3.5) # first
+        self._points_conical_flask: List[QPointF] = [ self._transform.map(p) for p in self.POINTS_CONICAL_FLASK ]
+        self._points_burette: List[QPointF] = [ self._transform.map(p) for p in self.POINTS_BURETTE ]
+        self._points_red_screw: List[QPointF] = [ self._transform.map(p) for p in self.POINTS_RED_SCREW ]
+        self._points_stopcock_release: List[QPointF] = [ self._transform.map(p) for p in self.POINTS_STOPCOCK_RELEASE ]
+        self._points_stopcock_hold: List[QPointF] = [ self._transform.map(p) for p in self.POINTS_STOPCOCK_HOLD ]
+    def conical_flask(self) -> QPolygonF: return QPolygonF(self._points_conical_flask)
+    def burette(self) -> QPolygonF: return QPolygonF(self._points_burette)
+    def red_screw(self) -> QPolygonF: return QPolygonF(self._points_red_screw)
+    def stopcock(self, is_released: bool):
+        if is_released: return QPolygonF(self._points_stopcock_release)
+        else: return QPolygonF(self._points_stopcock_hold)
+    def _fluid_conical_flask_by_height(self, ratio_height: float) -> QPolygonF:
+        # 0 <= ratio < 1 as to how much the flask is filled regarding height
+        return QPolygonF([
+            self._points_conical_flask[1] * ratio_height + self._points_conical_flask[2] * (1 - ratio_height),
+            self._points_conical_flask[2],
+            self._points_conical_flask[3],
+            self._points_conical_flask[4] * ratio_height + self._points_conical_flask[3] * (1 - ratio_height),
+        ])
+    def fluid_conical_flask(self, ratio_volume: float) -> QPolygonF:
+        # Ratio = Max Volume / Current Volume --> When ratio == 1, height is 80%
+        # Diameters from the slice of conical flask: only ratios are used
+        upper: float = self.POINTS_CONICAL_FLASK[5].x() - self.POINTS_CONICAL_FLASK[0].x()
+        lower: float = self.POINTS_CONICAL_FLASK[3].x() - self.POINTS_CONICAL_FLASK[2].x()
+        max_fill: float = (4 * upper + lower) / 5 # 80% from bottom
+        current_fill: float = math.cbrt(lower * lower * lower * (1 - ratio_volume) + max_fill * max_fill * max_fill * ratio_volume)
+        ratio_height = (lower - current_fill) / (lower - upper)
+        return self._fluid_conical_flask_by_height(ratio_height)
+    def _fluid_burette_by_height(self, ratio_height: float, is_released: bool) -> QPolygonF:
+        # 0 <= ratio < 1 as to how much the burette is filled regarding height
+        if not is_released: return QPolygonF([
+            self._points_burette[0] * ratio_height + self._points_burette[1] * (1 - ratio_height),
+            self._points_burette[1],
+            self._points_burette[2],
+            self._points_burette[3],
+            self._points_burette[13],
+            self._points_burette[14],
+            self._points_burette[15],
+            self._points_burette[16] * ratio_height + self._points_burette[15] * (1 - ratio_height),
+        ])
+        else: return QPolygonF([
+            self._points_burette[0] * ratio_height + self._points_burette[1] * (1 - ratio_height),
+            self._points_burette[1],
+            self._points_burette[2],
+            self._points_burette[3],
+            QPointF((0.68 - 0.7) / 7, self._points_burette[3].y()),
+            self._points_burette[8],
+            QPointF((0.72 - 0.7) / 7, self._points_burette[13].y()),
+            self._points_burette[13],
+            self._points_burette[14],
+            self._points_burette[15],
+            self._points_burette[16] * ratio_height + self._points_burette[15] * (1 - ratio_height),
+        ])
+    def fluid_burette(self, ratio_volume: float, is_released: bool) -> QPolygonF:
+        # Starts with 80% full and ends at 5%
+        return self._fluid_burette_by_height(ratio_volume * (0.8 - 0.05) + 0.05, is_released)
+
+# ExperimentVisuals: Paints Experiment
+class ExperimentVisuals(QWidget):
+    # Colors used
+    GLASS_COLOR = QColor(230, 230, 240, 40)
+    WATER_COLOR = QColor(220, 220, 245, 40)
+    TITRANT_COLOR = QColor(100, 180, 255, 150)
+    REDSCREW_COLOR = QColor(220, 70, 70, 255)
+    # TODO: Consider Removing Water Tint
+
+    # Only created once simulation starts, and destroyed when over
+    def __init__(self, simulation_obj: Simulation, titrant_volume_manager: TitrantVolumeManager, indicator_index: int):
+        # TODO: Set Minimal Width
+        super().__init__()
+        self.is_released: bool = False
+        self.simulation_obj: Simulation = simulation_obj
+        self.titrant_volume_manager: TitrantVolumeManager = titrant_volume_manager
+        self._hovering: bool = False # Prevent spawning tooltips constantly
+        self.indicator_index: int = indicator_index
+
+        self.model_factory = TitrationModelFactory()
+        # Get references in order to handle mouse event
+        self.painted_stopcock: QPolygonF = None
+        self.setMouseTracking(True)
+        
+        # Signals
+        self.titrant_volume_manager.is_autotitration_on_changed.connect(self._on_autotitration_on_change)
+        self.titrant_volume_manager.is_user_moving_slider_changed.connect(self._on_user_moving_slider_change)
+        self.titrant_volume_manager.current_volume_changed.connect(self._on_current_volume_change)
+    def paintEvent(self, _: QPaintEvent):
+        # TODO: Render Color of Solution
+        max_titrant_volume: float = self.simulation_obj.get_max_titrant_volume()
+        current_titrant_volume: float = self.simulation_obj.titrant_volume
+        analyte_volume: float = self.simulation_obj.config_data.analyte.volume
+        current_pH: float = self.simulation_obj.get_current_pH()
+        solution_color: QColor = self.simulation_obj.get_solution_color(current_pH, self.indicator_index)
+        painter = QPainter(self)
+        # Float coordinates look smooth
+        painter.setRenderHint(QPainter.Antialiasing)
+        # Background White
+        rect = self.rect()
+        painter.fillRect(rect, Qt.white)
+        # transform that scales and then moves (0, 0) to the center of widget
+        transform = QTransform()
+        w = rect.width()
+        h = rect.height()
+        transform.translate(w / 2, h / 2) # second
+        transform.scale(h * 0.9, h * 0.9) # first
+        # Draw
+        # Info Rect #TODO: Set font, size, color etc properties
+        rect_info = QRect(10, 10, w, 40)
+        # painter.fillRect(rect_info, Qt.red)
+        painter.drawText(rect_info, Qt.AlignLeft, f"{self.simulation_obj.config_data.indicators[self.indicator_index].name}\npH : {current_pH:.2f}")
+        # Burette
+        painter.setPen(QPen(Qt.black, 1))
+        painter.setBrush(self.GLASS_COLOR)
+        painter.drawPolygon(transform.map(self.model_factory.burette()))
+        # Burette Fluid
+        painter.setPen(QPen(Qt.black, 0.5))
+        painter.setBrush(self.TITRANT_COLOR)
+        painter.drawPolygon(transform.map(self.model_factory.fluid_burette((max_titrant_volume - current_titrant_volume) / max_titrant_volume, self.is_released)))
+        # Conical Flask
+        painter.setPen(QPen(Qt.black, 1))
+        painter.setBrush(self.GLASS_COLOR)
+        painter.drawPolygon(transform.map(self.model_factory.conical_flask()))
+        # Conical Flask Fluid
+        painter.setPen(QPen(Qt.black, 0.5))
+        painter.setBrush(solution_color)
+        painter.drawPolygon(transform.map(self.model_factory.fluid_conical_flask((analyte_volume + current_titrant_volume) / (analyte_volume + max_titrant_volume))))
+        painter.setPen(QPen(Qt.black, 0.5))
+        painter.setBrush(self.WATER_COLOR)
+        painter.drawPolygon(transform.map(self.model_factory.fluid_conical_flask((analyte_volume + current_titrant_volume) / (analyte_volume + max_titrant_volume))))
+        # Red Screw
+        painter.setPen(QPen(Qt.black, 1))
+        painter.setBrush(self.REDSCREW_COLOR)
+        painter.drawPolygon(transform.map(self.model_factory.red_screw()))
+        # Stopcock
+        painter.setPen(QPen(Qt.black, 1))
+        painter.setBrush(self.GLASS_COLOR)
+        self.painted_stopcock = transform.map(self.model_factory.stopcock(self.is_released))
+        painter.drawPolygon(self.painted_stopcock)
+        painter.end()
+    def mouseMoveEvent(self, event: QMouseEvent):
+        # When mouse hovers above stopcock, change mouse shape to make it seem the stopcock is pressable
+        if not self.painted_stopcock: return
+        inside: bool = self.painted_stopcock.containsPoint(event.position(), Qt.WindingFill)
+        if inside and not self._hovering:
+            # Show tooltip
+            QToolTip.showText(event.globalPosition().toPoint(), f"클릭하여 자동적정 {"시작" if not self.is_released else "종료"}", self)
+            self._hovering = True
+            # Make the stopcock look clickable
+            self.setCursor(QCursor(Qt.PointingHandCursor))
+        elif not inside and self._hovering:
+            QToolTip.hideText()
+            self._hovering = False
+            self.setCursor(QCursor(Qt.ArrowCursor))
+    def mousePressEvent(self, event: QMouseEvent):
+        # If this is triggered, it is guaranteed that user is not moving slider
+        if not self.painted_stopcock: return
+        if self.painted_stopcock.containsPoint(event.position(), Qt.WindingFill):
+            # Stopcock clicked --> Autotitration on/off
+            self.titrant_volume_manager.is_autotitration_on = not self.is_released # If it was previously released, autotitration turns off
+            self.titrant_volume_manager.is_autotitration_on_changed.emit()
+    def _on_autotitration_on_change(self):
+        self.is_released = self.titrant_volume_manager.is_autotitration_on
+        self.update()
+    def _on_user_moving_slider_change(self):
+        if self.titrant_volume_manager.is_autotitration_on: return
+        # Change release state only if autotitration is off, and how is determined by whether user moves slider
+        self.is_released = self.titrant_volume_manager.is_user_moving_slider
+        self.update()
+    def _on_current_volume_change(self):
+        # TODO: Add Volume to Height Transform
+        # Volume is automatically handles withing paintEvent
+        self.update()
+
+# Simulation Panel: Shows up to 2 Visuals of Experiment
+class SimulationPanel(QWidget):
+    # TODO: Add QSS to make it seem this widget exists even when simulation isn't running
+    def __init__(self, simulation_obj: Simulation, titrant_volume_manager: TitrantVolumeManager):
+        super().__init__()
+        self.simulation_obj: Simulation = simulation_obj
+        self.titrant_volume_manager: TitrantVolumeManager = titrant_volume_manager
+        
+        self.layout_main = QHBoxLayout(self)
+        self.layout_main.setContentsMargins(0, 0, 0, 0)
+    def _clear_layout(self):
+        # This layout should only contain widgets and stretches
+        while self.layout_main.count():
+            item = self.layout_main.takeAt(0) # Remove item from layout
+            widget = item.widget()
+            if widget: widget.deleteLater()  # Ensure that the widget is deleted
+    def start_simulation(self):
+        for i in range(len(self.simulation_obj.config_data.indicators)): self.layout_main.addWidget(
+            ExperimentVisuals(self.simulation_obj, self.titrant_volume_manager, i)
+        )
+    def end_simulation(self):
+        self._clear_layout()
+
+# =======================================================
+# Calculation Display: pH Graph, Calculation
+# =======================================================
+
+# pHGraph: Titration Curve
+class pHGraphWidget(QWidget):
+    INDICATOR_BAND_PRECISION = 200 # Split the color change range into 300
+    CURRENT_POINT_COLOR = QColor("red")
+    EQUIVALENCE_POINT_COLOR = QColor("black")
+    def __init__(self, simulation_obj: Simulation, titrant_volume_manager: TitrantVolumeManager):
+        #TODO: Change color of all elements for style
+        super().__init__()
+        self.simulation_obj: Simulation = simulation_obj
+        self.titrant_volume_manager: TitrantVolumeManager = titrant_volume_manager
+        self.current_point: pyqtgraph.ScatterPlotItem = pyqtgraph.ScatterPlotItem()
+        layout = QVBoxLayout(self)
+
+        # Set light mode
+        pyqtgraph.setConfigOption("background", "w") # Background White
+        pyqtgraph.setConfigOption("foreground", "k") # Foreground Black
+        self.graph_plot = pyqtgraph.PlotWidget()  
+        layout.addWidget(self.graph_plot)    
+
+        # Lock interaction
+        self.graph_plot.setMouseEnabled(x=False, y=False) # No dragging
+        self.graph_plot.setMenuEnabled(False) # Disable menu
+        self.graph_plot.hideButtons() # Hide buttons like overlay buttons
+
+        # Set title and axis names
+        self.graph_plot.setTitle("중화적정 곡선")
+        self.graph_plot.setLabel("bottom", "가한 적정액 부피 (mL)")
+        self.graph_plot.setLabel("left", "pH")
+        self.graph_plot.showGrid(x=True, y=True, alpha=0.2)
+        self.graph_plot.enableAutoRange(x=False, y=False)
+
+        # TODO: Allow click on points
+        # self.current_point.sigClicked.connect(self._on_current_point_click)
+        self.titrant_volume_manager.current_volume_changed.connect(lambda: self._draw_current_point())
+    def _draw_titration_curve(self):
+        # Set ticks and range
+        max_volume = self.simulation_obj.get_max_titrant_volume()
+        self.graph_plot.setXRange(0, max_volume, padding=0)
+        self.graph_plot.setYRange(0, 14, padding=0)
+        # Draw curve
+        xs = np.linspace(0, max_volume, 500)
+        ys = np.array([self.simulation_obj.get_pH(x) for x in xs])
+        self.graph_plot.plot(xs, ys, pen=pyqtgraph.mkPen("k", width=2))
+    def _draw_indicator_bands(self):
+        for indicator_index, indicator in enumerate(self.simulation_obj.config_data.indicators):
+            # Create pH space for band
+            pKa: float = indicator.pK_ if indicator.is_acid else 14 - indicator.pK_ # Guaranteed that pK_ is not None
+            color_change_pH_space = np.linspace(pKa - 1, pKa + 1, self.INDICATOR_BAND_PRECISION)
+            
+            # Create short image
+            height: int = self.INDICATOR_BAND_PRECISION
+            width: int = 2 # To be stretched later
+            # Actually I was recommended to use (height, width, 3) but this breaks. So I'm just sticking to this
+            image = np.zeros((width, height, 3), dtype=np.uint8) # Create an image of height x width pixels each having RGB channel encoded in uint8 (0-255)
+            for i, pH in enumerate(color_change_pH_space):
+                color: QColor = self.simulation_obj.get_solution_color(pH, indicator_index)
+                image[:, i, :] = (color.red(), color.green(), color.blue()) # Broadcast the tuple to last axis
+            
+            item_image = pyqtgraph.ImageItem(image)
+            self.graph_plot.addItem(item_image)
+            max_volume = self.simulation_obj.get_max_titrant_volume()
+            item_image.setRect(QRectF(0, pKa - 1, max_volume, 2)) # Image is stretched to fit this rect
+            item_image.setOpacity(0.4) # Opacity
+            
+            # Add Text
+            text_name = pyqtgraph.TextItem(
+                text=f"{indicator.name}",
+                anchor=(0, 0.5),   # Anchor on center left
+                color=(0, 0, 0)
+            )
+            self.graph_plot.addItem(text_name)
+            text_name.setPos(0, pKa) # Center Left
+            text_name.setZValue(20)  # Send text above image
+    def _draw_current_point(self):
+        current_pH = self.simulation_obj.get_current_pH()
+        if not current_pH: return # Quick fix for config_data refer error at end_simulation
+        self.current_point.setData(
+            [self.simulation_obj.titrant_volume], [current_pH],
+            size=9,
+            pen=pyqtgraph.mkPen(self.CURRENT_POINT_COLOR),
+            brush=pyqtgraph.mkBrush(self.CURRENT_POINT_COLOR),
+            symbol="o"
+        )
+    def _draw_equivalence_point_and_line(self):
+        equivalence_volume = self.simulation_obj.get_equivalence_titrant_volume()
+        self.graph_plot.addItem(pyqtgraph.InfiniteLine(
+            pos=equivalence_volume,
+            angle=90,
+            pen=pyqtgraph.mkPen("r", style=Qt.DotLine, width=2)
+        ))
+        pass
+    def start_simulation(self):
+        self._draw_titration_curve()
+        self._draw_indicator_bands()
+        self.graph_plot.addItem(self.current_point)
+        self._draw_equivalence_point_and_line()
+        self._draw_current_point()
+    def end_simulation(self):
+        self.current_point.clear()
+        self.graph_plot.clear() # Clears all items
+
+# CalculationInfo: Displays How the Simulation Calculated with Approximating Methods
+class CalculationInfo(QWidget):
+    def __init__(self, simulation_obj: Simulation, titrant_volume_manager: TitrantVolumeManager):
+        super().__init__()
+        self.simulation_obj: Simulation = simulation_obj
+        self.titrant_volume_manager: TitrantVolumeManager = titrant_volume_manager
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        self.scroll = QScrollArea()
+        layout.addWidget(self.scroll)
+        self.scroll.setWidgetResizable(True) # Allow resizing
+        self.label_info = QLabel("")
+        self.scroll.setWidget(self.label_info)
+
+        # Signals
+        self.titrant_volume_manager.current_volume_changed.connect(self._on_volume_change)
+    def _on_volume_change(self):
+        config_data = self.simulation_obj.config_data
+        if not config_data: return
+        if config_data.analyte.chemical.is_acid:
+            HA: Chemical = config_data.analyte.chemical
+            a: float = config_data.analyte.concentration
+            Va: float = config_data.analyte.volume
+            B: float = config_data.titrant.chemical
+            b: float = config_data.titrant.concentration
+            Vb: float = self.simulation_obj.titrant_volume
+        else:
+            B: Chemical = config_data.analyte.chemical
+            b: float = config_data.analyte.concentration
+            Vb: float = config_data.analyte.volume
+            HA: Chemical = config_data.titrant.chemical
+            a: float = config_data.titrant.concentration
+            Va: float = self.simulation_obj.titrant_volume
+        Ca: float = a * Va / (Va + Vb)
+        Cb: float = b * Vb / (Va + Vb)
+        if not HA.is_strong: Ka: float = pow(10, -HA.pK_)
+        if not B.is_strong: Kb: float = pow(10, -B.pK_)
+        current_pH = self.simulation_obj.get_current_pH()
+        cH3Oplus: float = pow(10, -current_pH)
+        cOH_: float = 1e-14 / cH3Oplus
+        cA_: float = Ca if HA.is_strong else Ca * Ka / (Ka + cH3Oplus)
+        cBHplus: float = Cb if B.is_strong else Cb * Kb / (Kb + cOH_)
+        cHA: float = Ca - cA_
+        cB: float = Cb - cBHplus
+        indicator_html = "<p>"
+        for index, indicator in enumerate(self.simulation_obj.config_data.indicators):
+            indicator_html = f"{indicator_html}<br>{indicator.name} : [In<sup>-</sup>]/[HIn] = {pow(10, -self.simulation_obj._get_p_In_HIn(current_pH, index)):.1e}"
+            pass
+        indicator_html = f"{indicator_html}</p>"
+        self.label_info.setText(f"""{
+            f"<p>HA : {HA.name} {a:.2f}M {Va:.2f}mL<br>B: {B.name} {b:.2f}M {Vb:.2f}mL</p>"
+        }<hr>{
+            f"<p>pH = {current_pH:.2f}<br>[HA] = {cHA:.1e}, [A<sup>-</sup>] = {cA_:.1e}<br>[B] = {cB:.1e}, [BH<sup>+</sup>] = {cBHplus:.1e}<br>[H<sub>3</sub>O<sup>+</sup>] = {cH3Oplus:.1e}, [OH<sup>-</sup>] = {cOH_:.1e}</p>"
+        }<hr>{indicator_html}<hr>{
+            "HELLO WORLD"
+        }""") #TODO: Add Approximation in Hello World
+        # [HA], [A-], [H3O+], [B], [BH+], [OH-], [In-]/[HIn]
+        # Apporximate calculator
+        pass
+    def start_simulation(self):
+        self._on_volume_change()
+    def end_simulation(self):
+        self.label_info.setText("")
+
+# Calculation Panel: Visualization into Graph and Calculations
+class CalculationsPanel(QTabWidget):
+    def __init__(self, simulation_obj: Simulation, titrant_volume_manager: TitrantVolumeManager):
+        super().__init__()
+        self.simulation_obj: Simulation = simulation_obj
+        self.titrant_volume_manager: TitrantVolumeManager = titrant_volume_manager
+        self.setEnabled(False)
+
+        self.pH_graph_widget = pHGraphWidget(self.simulation_obj, self.titrant_volume_manager)
+        self.calculation_info = CalculationInfo(self.simulation_obj, self.titrant_volume_manager)
+
+        self.addTab(self.pH_graph_widget, "적정곡선")
+        self.addTab(self.calculation_info, "계산결과")
+    def start_simulation(self):
+        self.setEnabled(True)
+        self.pH_graph_widget.start_simulation()
+        self.calculation_info.start_simulation()
+    def end_simulation(self):
+        self.setEnabled(False)
+        self.pH_graph_widget.end_simulation()
+        self.calculation_info.end_simulation()
+
+
+# =======================================================
+# Slider: Control Widget of Titrant Volume
+# =======================================================
+
+# SliderTicks: Ticks Indicating Progression of Slider
+class SliderTicks(QWidget):
+    def __init__(self):
+        # Ticks for the slider --> variable
+        super().__init__()    
+        self.setFixedHeight(20) # Set fixed height
+        self.layout_main = QHBoxLayout(self)
+        self.layout_main.setContentsMargins(2, 0, 2, 0) #TODO: Reconsider making this 0, 0, 0, 0
+        self.layout_main.setSpacing(0)
+    def clear(self):
+        # This layout should only contain widgets and stretches
+        while self.layout_main.count():
+            item = self.layout_main.takeAt(0) # Remove item from layout
+            widget = item.widget()
+            if widget: widget.deleteLater()  # Ensure that the widget is deleted
+    def set_scale(self, max_val: float, split_number: int): # split number is number of intervals
+        self.clear()
+        self.layout_main.addWidget(QLabel("0.00mL"))
+        # Create N + 1 equally spaced numbers from 0 to max_val except 0
+        tick_numbers = [i * max_val / split_number for i in range(1, split_number + 1)]
+        for num in tick_numbers:
+            self.layout_main.addStretch(1) # This creates spaces in between
+            self.layout_main.addWidget(QLabel(f"{num:.2f}mL"))
+        # Automatically updates
+
+# SliderCard: Main Card Containing Slider and ETC.
+class SliderCard(QFrame):
+    SLIDER_VALUE_TO_VOLUME = 1000 # Slider Unit / mL
+    TIMEOUT_INTERVAL = 50 # 50ms
+    # A slider and additional elemnts that control titrant volume
+    def __init__(self, simulation_obj: Simulation, titrant_volume_manager: TitrantVolumeManager):
+        super().__init__()
+        self.simulation_obj: Simulation = simulation_obj
+        self.titrant_volume_manager: TitrantVolumeManager = titrant_volume_manager
+
+        self.setEnabled(False)
+        self.setToolTip("적정 상황 및 지시약을 먼저 설정하세요")
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(4)
+
+        layout_header = QHBoxLayout()
+        layout.addLayout(layout_header)
+        # Start button and speed control for autotitriation
+        layout_autotitration = QHBoxLayout()
+        self.button_start = QToolButton()
+        self.button_start.setText("▶") # '⏹' for stop
+        self.button_start.setFixedWidth(30)
+        label_speed_tag = QLabel("속도 :")
+        self.dspin_speed = QDoubleSpinBox()
+        self.dspin_speed.setRange(0.1, 10.0)
+        self.dspin_speed.setSingleStep(0.1)
+        self.dspin_speed.setDecimals(1)
+        self.dspin_speed.setSuffix(" mL/s")
+        layout_autotitration.addWidget(self.button_start)
+        layout_autotitration.addWidget(label_speed_tag)
+        layout_autotitration.addWidget(self.dspin_speed)
+        # Volume Marking
+        self.label_titrant_volume = QLabel("0.00mL") #TODO: QSS Value Display
+        layout_header.addLayout(layout_autotitration)
+        layout_header.addStretch(1)
+        layout_header.addWidget(self.label_titrant_volume)
+        
+        # Slider
+        self.slider_titrant_volume = QSlider(Qt.Horizontal)
+        layout.addWidget(self.slider_titrant_volume)
+        # Slider Ticks
+        self.slider_ticks = SliderTicks()
+        # TODO: Add ticks once activated
+        layout.addWidget(self.slider_ticks)
+
+        # Signals
+        self.slider_titrant_volume.sliderPressed.connect(self._on_slider_press_by_user)
+        self.slider_titrant_volume.sliderReleased.connect(self._on_slider_release_by_user)
+        self.slider_titrant_volume.valueChanged.connect(self._on_slider_value_change)
+        self.button_start.clicked.connect(self._on_start_button_click) # Autotitration
+
+        self.titrant_volume_manager.is_user_moving_slider_changed.connect(self._on_user_moving_slider_change)
+        self.titrant_volume_manager.is_autotitration_on_changed.connect(self._on_autotitration_on_change)
+        self.titrant_volume_manager.timer_timeout.connect(self._on_timer_timeout)
+        self.titrant_volume_manager.current_volume_changed.connect(self._on_current_volume_change)
+    def get_autotitration_speed(self) -> float: return self.dspin_speed.value()
+    def start_simulation(self):
+        self.setEnabled(True)
+        # self.button_start.setText("▶")
+        max_volume = self.simulation_obj.get_max_titrant_volume()
+        self.slider_titrant_volume.setMaximum(max_volume * self.SLIDER_VALUE_TO_VOLUME)
+        self.slider_ticks.set_scale(max_volume, 5) # Set ticks
+    def end_simulation(self):
+        self.setEnabled(False)
+        # self.button_start.setText("▶")
+        # self.label_titrant_volume.setText("0.00mL")
+        self.slider_titrant_volume.setValue(0)
+        self.slider_ticks.clear() # Clear ticks
+    # Emitting signals
+    def _on_slider_press_by_user(self):
+        self.titrant_volume_manager.is_user_moving_slider = True
+        self.titrant_volume_manager.is_user_moving_slider_changed.emit()
+    def _on_slider_release_by_user(self):
+        self.titrant_volume_manager.is_user_moving_slider = False
+        self.titrant_volume_manager.is_user_moving_slider_changed.emit()
+    def _on_slider_value_change(self, new_val: int):
+        self.simulation_obj.titrant_volume = new_val / self.SLIDER_VALUE_TO_VOLUME
+        self.titrant_volume_manager.current_volume_changed.emit()
+    def _on_start_button_click(self):
+        self.titrant_volume_manager.is_autotitration_on = not self.titrant_volume_manager.is_autotitration_on
+        self.titrant_volume_manager.is_autotitration_on_changed.emit()
+    # Connecting slots
+    def _on_user_moving_slider_change(self):
+        if self.titrant_volume_manager.is_autotitration_on:
+            if self.titrant_volume_manager.is_user_moving_slider:
+                # Stop timer
+                self.titrant_volume_manager.timer.stop()
+            else:
+                # Start timer
+                self.titrant_volume_manager.timer.start(self.TIMEOUT_INTERVAL)
+    def _on_autotitration_on_change(self):
+        if self.titrant_volume_manager.is_autotitration_on:
+            # If current volume is maximum reset volume
+            if self.simulation_obj.titrant_volume * self.SLIDER_VALUE_TO_VOLUME == self.slider_titrant_volume.maximum():
+                self.simulation_obj.titrant_volume = 0.0
+                self.slider_titrant_volume.setValue(0)
+                self.titrant_volume_manager.current_volume_changed.emit()
+            self.button_start.setText("■")
+            self.titrant_volume_manager.timer.start(self.TIMEOUT_INTERVAL)
+        else:
+            self.button_start.setText("▶")
+            self.titrant_volume_manager.timer.stop()
+    def _on_current_volume_change(self):
+        self.label_titrant_volume.setText(f"{self.simulation_obj.titrant_volume:.2f}mL")
+    def _on_timer_timeout(self):
+        current_volume = self.simulation_obj.titrant_volume
+        if current_volume * self.SLIDER_VALUE_TO_VOLUME == self.slider_titrant_volume.maximum():
+            # Reached end
+            self.titrant_volume_manager.is_autotitration_on = False
+            self.titrant_volume_manager.is_autotitration_on_changed.emit()
+        else:
+            self.slider_titrant_volume.setValue(
+                (current_volume + self.get_autotitration_speed() * self.TIMEOUT_INTERVAL / 1000) *
+                self.SLIDER_VALUE_TO_VOLUME
+            ) # This calls current_volume_changed automatically
+
+# =======================================================
+# Main Window and Entry Point of Application
+# =======================================================
+
+# MainWindow: Main Window Widget of App
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("중화적정 시뮬레이션 프로그램")
+        #TODO: self.resize: decide later on
+
+        # Setup simulation
+        self.simulation_obj: Simulation = Simulation() # This object's reference gets passed on to children
+
+        # Setup titrant volume manager
+        self.titrant_volume_manager = TitrantVolumeManager(self)
+
+        # Build ui framework
+        self._build_ui_framework()
+    def _build_ui_framework(self):
+        # Build Menu Bar
+        # TODO: Add action implementations
+        menubar = self.menuBar()
+        # File Menu
+        file_menu = menubar.addMenu("파일")
+        action_quit = file_menu.addAction("종료하기") # Quit program
+        action_quit.setShortcut("Ctrl+Q") # Quit
+        # Edit Menu
+        edit_menu = menubar.addMenu("편집")
+        self.action_reset = edit_menu.addAction("설정 초기화") # Reset all configurations
+        self.action_reset.setShortcut("Ctrl+R") # Reset
+        # Window Menu
+        window_menu = menubar.addMenu("창")
+        action_add_delete_chemicals = window_menu.addAction("물질 추가/제거") # Add edit delete chemicals
+        action_add_delete_chemicals.setShortcut("Ctrl+M") # Manage
+        action_show_theoretical_background = window_menu.addAction("이론적 배경") # Show theoretical background
+        action_show_theoretical_background.setShortcut("Ctrl+T") # Theoretical
+        # Help Menu
+        help_menu = menubar.addMenu("도움말")
+        action_about = help_menu.addAction("프로그램 정보")
+
+        # Build Central Widget
+        central = QWidget()
+        # Main Layout
+        layout = QVBoxLayout(central)
+        self.setCentralWidget(central)
+        layout.setContentsMargins(15, 10, 15, 10) # Set inner padding of layout
+        layout.setSpacing(10) # Set vertical gap for all inner widgets
+        # Title
+        label_title = QLabel("중화적정 시뮬레이션")
+        label_title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label_title)
+
+        # Layout for Main Row
+        layout_main_row = QHBoxLayout()
+        layout_main_row.setSpacing(12) # Horizontal Gap
+        # Slider card that controls simulation
+        self.slider_card = SliderCard(self.simulation_obj, self.titrant_volume_manager)
+        # Add to main layout
+        layout.addLayout(layout_main_row, stretch=1) # Only the main row expands vertically
+        layout.addWidget(self.slider_card, stretch=0)
+        
+        # Add widgets to main row
+        self.config_panel = ConfigurationPanel(self.simulation_obj)
+        self.simulation_panel = SimulationPanel(self.simulation_obj, self.titrant_volume_manager)
+        self.calculations_panel = CalculationsPanel(self.simulation_obj, self.titrant_volume_manager)
+        layout_main_row.addWidget(self.config_panel)
+        layout_main_row.addWidget(self.simulation_panel, stretch=4)
+        layout_main_row.addWidget(self.calculations_panel, stretch=3) #TODO: Modify value
+        
+        # Signals
+        # TODO: Consider moving simulation start/stop button to simulation panel
+        action_quit.triggered.connect(self.close)
+        self.action_reset.triggered.connect(self.config_panel._on_reset_button_click)
+        action_add_delete_chemicals.triggered.connect(self._on_manage_chemicals)
+        self.config_panel.is_running_simulation_changed.connect(self._on_running_simulation_change)
+    def _on_running_simulation_change(self, is_started: bool):
+        # Activation/Deactivation of components
+        if is_started: self.start_simulation()
+        else: self.end_simulation()
+    def _on_manage_chemicals(self):
+        ManageSelectChemicalsModal.manage_chemicals(self, self.simulation_obj, True, True, True)
+    def start_simulation(self):
+        self.titrant_volume_manager.start_simulation()
+        # Activate all components as simulation has started
+        self.simulation_panel.start_simulation()
+        self.calculations_panel.start_simulation()
+        # Activate and configure slider card
+        self.slider_card.start_simulation()
+        # Disable reset action
+        self.action_reset.setEnabled(False)
+    def end_simulation(self):
+        self.titrant_volume_manager.end_simulation()
+        self.simulation_panel.end_simulation()
+        self.calculations_panel.end_simulation()
+        self.slider_card.end_simulation()
+        # Re-enable reset action
+        self.action_reset.setEnabled(True)
 
 # Main Entry Point
 def main():
