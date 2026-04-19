@@ -9,7 +9,7 @@
 Install the required dependency:
 
 ```
-pip install PySide6 pyqtgraph
+pip install PySide6 pyqtgraph matplotlib
 ```
 
 ## Running the Program
