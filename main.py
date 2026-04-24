@@ -2021,6 +2021,7 @@ class MainWindow(QMainWindow):
 # Main Entry Point
 def main():
     app = QApplication(sys.argv)
+    # app.setStyleSheet() # Load QSS stylesheet
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
