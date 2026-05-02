@@ -1955,8 +1955,8 @@ class MainWindow(QMainWindow):
         window_menu = menubar.addMenu("창")
         action_add_delete_chemicals = window_menu.addAction("물질 추가/제거") # Add edit delete chemicals
         action_add_delete_chemicals.setShortcut("Ctrl+M") # Manage
-        action_show_theoretical_background = window_menu.addAction("이론적 배경") # Show theoretical background
-        action_show_theoretical_background.setShortcut("Ctrl+T") # Theoretical
+        # action_show_theoretical_background = window_menu.addAction("이론적 배경") # Show theoretical background
+        # action_show_theoretical_background.setShortcut("Ctrl+T") # Theoretical
         # Help Menu
         help_menu = menubar.addMenu("도움말")
         action_about = help_menu.addAction("프로그램 정보")

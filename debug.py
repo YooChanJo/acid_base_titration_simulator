@@ -24,10 +24,14 @@ def run(name: str = "main", venv: bool = False, venv_name: str | None = None):
             print(f"{name}.py terminated by user\n")
             break
 
-# Entry Point
-venv = len(sys.argv) > 1
-venv_name = sys.argv[1] if venv else None
-while True:
-    run("main", venv, venv_name)
-    if exit_flag: break
-    print("--- Restarting... ---")
+# Main Entry Point
+def main():
+    venv = len(sys.argv) > 1
+    venv_name = sys.argv[1] if venv else None
+    while True:
+        run("main", venv, venv_name)
+        if exit_flag: break
+        print("--- Restarting... ---")
+
+# Run entry point if directly run
+if __name__ == "__main__": main()
