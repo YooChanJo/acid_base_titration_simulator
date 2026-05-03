@@ -1067,7 +1067,7 @@ class ConfigurationPanel(QWidget):
         layout_groupbox_config.addLayout(layout_titrant_concentration)
         
         # Choose indicator
-        groupbox_indicator = QGroupBox("지시약을 선택하세요")
+        groupbox_indicator = QGroupBox("지시약을 추가하세요")
         layout.addWidget(groupbox_indicator)
         layout_groupbox_config = QVBoxLayout(groupbox_indicator)
         layout_groupbox_config.setContentsMargins(12, 8, 12, 8)
@@ -1947,13 +1947,13 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu("파일")
         action_quit = file_menu.addAction("종료하기") # Quit program
         action_quit.setShortcut("Ctrl+Q") # Quit
-        # Edit Menu
-        edit_menu = menubar.addMenu("편집")
-        self.action_reset = edit_menu.addAction("설정 초기화") # Reset all configurations
+        # Tools Menu
+        tool_menu = menubar.addMenu("도구")
+        self.action_reset = tool_menu.addAction("설정 초기화") # Reset all configurations
         self.action_reset.setShortcut("Ctrl+R") # Reset
-        # Window Menu
-        window_menu = menubar.addMenu("창")
-        action_add_delete_chemicals = window_menu.addAction("물질 추가/제거") # Add edit delete chemicals
+        # # Window Menu
+        # window_menu = menubar.addMenu("창")
+        action_add_delete_chemicals = tool_menu.addAction("물질 추가/제거") # Add edit delete chemicals
         action_add_delete_chemicals.setShortcut("Ctrl+M") # Manage
         # action_show_theoretical_background = window_menu.addAction("이론적 배경") # Show theoretical background
         # action_show_theoretical_background.setShortcut("Ctrl+T") # Theoretical
