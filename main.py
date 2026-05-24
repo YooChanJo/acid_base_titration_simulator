@@ -173,7 +173,7 @@ class Simulation:
     #   (a) [A⁻] * [H₃O⁺] / [HA] = Ka                (Equivalence of HA)
     #   (b) [HA] + [A⁻] = a * Va / (Va + Vb) = Ca    (Conservation of Mass)
     #   (c) [BH⁺] * [OH⁻] / [B] = Kb                 (Equivalence of B)
-    #   (d) [B] + [BH⁺] = b * Va / (Va + Vb) = Cb    (Conservation of Mass)
+    #   (d) [B] + [BH⁺] = b * Vb / (Va + Vb) = Cb    (Conservation of Mass)
     #   (e) [H₃O⁺] * [OH⁻] = Kw                      (Equivalence of Water Self-Ionization)
     #   (f) [H₃O⁺] - [A⁻] = [OH⁻] - [BH⁺]            (Conservation of Charge)
     # Solution:
@@ -196,7 +196,7 @@ class Simulation:
     #           dx/dy = -ln(10) * pow(10, -y) = -ln(10) * x
     #       Due constraints x, Ca, Cb, Ka, Kb, Kw > 0 from 3, it can be said that
     #           df/dx > 1, dx/dy < 0
-    #       Thus df/dy < 0, meaning f(x=pow(10, -y)) strictly decreases regarding, y meaning it only has one solution, and its derivative NEVER equals 0
+    #       Thus df/dy < 0, meaning f(x=pow(10, -y)) strictly decreases regarding y, meaning it only has one solution, and its derivative NEVER equals 0
     #       From the range of x₀ from 3, it is guaranteed that -1 < y₀ < 15
     #       If HA is strong: Ca * Ka / pow(Ka + x, 2) reduces to 0
     #       If B is strong: (Cb * Kw / Kb) / pow(x + Kw / Kb, 2) reduces to 0
