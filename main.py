@@ -7,7 +7,7 @@
 # ==============================================================================
 # PROJECT LICENSE
 # ==============================================================================
-# Copyright (c) 2026 Yoo-Chan Jo
+# Copyright (c) 2026 Yoo-Chan Jo, Jae Hyeong Choi, Hoseong Yoon, Junwoo Chung
 # 
 # This project is licensed under the MIT License.
 # You may use, copy, modify, and distribute this software for any purpose
@@ -26,6 +26,19 @@
 #    Licensed under the MIT License.
 #    Project page: https://www.pyqtgraph.org
 # ==============================================================================
+
+
+
+# =======================================================
+# Memory Management Policy (MMP)
+# 1. All Variables Kept Singleton, Passed by Reference
+# 2. Exception for Initialization of Internal Variables
+# =======================================================
+# Type Annotation Policy
+# 1. All Non-Widget Class Data Variable Types Annotated
+# 2. Return Values Annotated When Not Explicit
+# 3. When Explicit, Return Values Optionally Annotated
+# =======================================================
 
 # Imports
 import sys
@@ -60,17 +73,6 @@ from PySide6.QtWidgets import (
     # Etc
     QLabel, QAbstractItemView, QTableWidgetItem, QHeaderView, QToolTip, QMessageBox
 )
-
-# =======================================================
-# Memory Management Policy (MMP)
-# 1. All Variables Kept Singleton, Passed by Reference
-# 2. Exception for Initialization of Internal Variables
-# =======================================================
-# Type Annotation Policy
-# 1. All Non-Widget Class Data Variable Types Annotated
-# 2. Return Values Annotated When Not Explicit
-# 3. When Explicit, Return Values Optionally Annotated
-# =======================================================
 
 # =======================================================
 # Abstract Objects: For Calculation and Simulation
@@ -330,7 +332,8 @@ class Simulation:
         # Reconvert back to sRGB
         sRGB: List[int] = [ int(pow(pow(10, -AX), 1 / 2.2) * 255) for AX in A ]
         return QColor(sRGB[0], sRGB[1], sRGB[2])
-        
+
+
 # =======================================================
 # Utilities: Helper Functions
 # =======================================================
@@ -361,6 +364,7 @@ def display_warning(parent: QWidget, message: str): QMessageBox.warning(parent, 
 
 # display_info: Opens an info modal
 def display_info(parent: QWidget, message: str): QMessageBox.information(parent, "정보", message)
+
 
 # =======================================================
 # Manage Chemicals: Manage List of Chemicals Used in App
@@ -925,6 +929,7 @@ class ManageSelectChemicalsModal(QDialog):
         if dialog.exec() == QDialog.Accepted: return dialog._get_selected_chemical()
         else: return None
 
+
 # =======================================================
 # Configuration: Getting Configs for Simulation
 # =======================================================
@@ -1225,7 +1230,8 @@ class ConfigurationPanel(QWidget):
         self.dspin_titrant_concentration.setValue(1.00)
         # Remove indicators
         self.indicator_list.clear_entries()
-   
+
+
 # =======================================================
 # Titrant Volume: Autotitration and User-Control
 # =======================================================
@@ -1252,6 +1258,7 @@ class TitrantVolumeManager(QObject):
         self.timer.stop()
         self.is_autotitration_on = False
         self.is_autotitration_on_changed.emit()
+
 
 # =======================================================
 # Experiment Visuals: Visualization of Experiment
@@ -1496,6 +1503,7 @@ class SimulationPanel(QWidget):
     def end_simulation(self):
         clear_layout(self.layout_main)
 
+
 # =======================================================
 # Calculation Display: pH Graph, Calculation
 # =======================================================
@@ -1712,6 +1720,7 @@ class CalculationsPanel(QTabWidget):
         self.pH_graph_widget.end_simulation()
         self.calculation_info.end_simulation()
 
+
 # =======================================================
 # Slider: Control Widget of Titrant Volume
 # =======================================================
@@ -1855,6 +1864,7 @@ class SliderCard(QFrame):
                 (current_volume + self.get_autotitration_speed() * self.TIMEOUT_INTERVAL / 1000) *
                 self.SLIDER_VALUE_TO_VOLUME
             ) # This calls current_volume_changed automatically
+
 
 # =======================================================
 # Main Window and Entry Point of Application
