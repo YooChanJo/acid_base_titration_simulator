@@ -1,8 +1,31 @@
-# =======================================================
+# ==============================================================================
 # This is a project for 문제해결과컴퓨팅사고 SKKU 2026-1
 # Team: 지시약과 아이들
-# Licence for PySide6 by LGPL #TODO: To be added Later
-# =======================================================
+# Required: Python >= 3.7
+# Dependency Installation: pip install PySide6 pyqtgraph
+# Run With: python main.py
+# ==============================================================================
+# PROJECT LICENSE
+# ==============================================================================
+# Copyright (c) 2026 Yoo-Chan Jo
+# 
+# This project is licensed under the MIT License.
+# You may use, copy, modify, and distribute this software for any purpose
+# with or without fee, provided the above copyright notice appears in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+# ==============================================================================
+# THIRD-PARTY NOTICES
+# ==============================================================================
+# 1. PySide6
+#    Licensed under the GNU Lesser General Public License version 3 (LGPLv3).
+#    Source code: https://code.qt.io/cgit/pyside/pyside-setup.git/
+#
+# 2. PyQtGraph
+#    Copyright (c) Luke Campagnola / PyQtGraph Developers.
+#    Licensed under the MIT License.
+#    Project page: https://www.pyqtgraph.org
+# ==============================================================================
 
 # Imports
 import sys
@@ -37,13 +60,6 @@ from PySide6.QtWidgets import (
     # Etc
     QLabel, QAbstractItemView, QTableWidgetItem, QHeaderView, QToolTip, QMessageBox
 )
-from PySide6.QtSvgWidgets import QSvgWidget
-
-# # MatPlotLib Imports
-# from io import BytesIO                                      # Handle SVG in Memory
-# import os
-# os.environ["QT_LOGGING_RULES"] = "qt.svg=false" # Disable qt.svg error complains due to space characters
-# import matplotlib.pyplot as plt
 
 # =======================================================
 # Memory Management Policy (MMP)
@@ -305,8 +321,8 @@ class Simulation:
         RGBb: List[float] = [ pow(sRGBb.redF(), 2.2), pow(sRGBb.greenF(), 2.2), pow(sRGBb.blueF(), 2.2) ]
 
         # Convert to Absorbance
-        Aa: List[float] = [ -math.log10(X) for X in RGBa ]
-        Ab: List[float] = [ -math.log10(X) for X in RGBb ]
+        Aa: List[float] = [ -math.log10(max(X, 1e-17)) for X in RGBa ] # Block 0 Input
+        Ab: List[float] = [ -math.log10(max(X, 1e-17)) for X in RGBb ] # Block 0 Input
 
         # Interpolate
         A: List[float] = [ a / (1 + f) + b * f / (1 + f) for a, b in zip(Aa, Ab) ]
@@ -340,8 +356,11 @@ def clear_layout(layout: QLayout):
 
         elif spacer is not None: del spacer
 
-def display_warning(parent: QWidget, message: str):
-    QMessageBox.warning(parent, "경고", message)
+# display_warning: Opens a warning modal
+def display_warning(parent: QWidget, message: str): QMessageBox.warning(parent, "경고", message)
+
+# display_info: Opens an info modal
+def display_info(parent: QWidget, message: str): QMessageBox.information(parent, "정보", message)
 
 # =======================================================
 # Manage Chemicals: Manage List of Chemicals Used in App
@@ -594,7 +613,6 @@ class EditChemicals(QWidget):
                 "지시약"
             )
         )
-        #TODO: For indicators, add a visual way of seeing colors --> QSS
         # Predefined Chemicals
         groupbox_predefined = QGroupBox(f"미리 정의된 {type_name}")
         layout.addWidget(groupbox_predefined)
@@ -979,8 +997,8 @@ class DynamicIndicatorList(QWidget):
         for entry in self.entries: entry.set_read_only(read_only)
         self.button_plus.setEnabled(not read_only)
 
-# TODO: Why does space button trigger submit?
-# TODO: Indicator might get edited after add --> handle exception
+#GLITCH: Space button (default button) behavior is not controlled
+#GLITCH: Indicator can be edited/deleted after add, potential crashes expected
 # ConfigurationPanel: Panel on Left for Simulation Configuration
 class ConfigurationPanel(QWidget):
     MAX_INDICATOR_NUM = 3
@@ -992,7 +1010,7 @@ class ConfigurationPanel(QWidget):
         self.selected_analyte: Chemical | None = None
         self.selected_titrant: Chemical | None = None
         self.is_simulation_running: bool = False
-        self.setFixedWidth(300) #TODO: Fix Width
+        self.setFixedWidth(300)
         
         layout = QVBoxLayout(self)
         layout.setSpacing(10) # Vertical Gap
@@ -1464,7 +1482,6 @@ class ExperimentVisuals(QWidget):
 
 # Simulation Panel: Shows up to 2 Visuals of Experiment
 class SimulationPanel(QWidget):
-    # TODO: Add QSS to make it seem this widget exists even when simulation isn't running
     def __init__(self, simulation_obj: Simulation, titrant_volume_manager: TitrantVolumeManager):
         super().__init__()
         self.simulation_obj: Simulation = simulation_obj
@@ -1479,63 +1496,6 @@ class SimulationPanel(QWidget):
     def end_simulation(self):
         clear_layout(self.layout_main)
 
-# # =======================================================
-# # MathTeX SVG: Handling subset of LaTex as SVG
-# # =======================================================
-
-# # MathTeXSVGWidget: Contains SVG of MathTeX(LaTeX)
-# class MathTeXSVGWidget(QWidget):
-#     def __init__(self):
-#         super().__init__()
-#         layout = QVBoxLayout(self)
-#         layout.setContentsMargins(0, 0, 0, 0)
-
-#         self.svg_widget = QSvgWidget()
-#         layout.addWidget(self.svg_widget)
-
-#     def load(self, expr: str, font_size: int = 20):
-#         svg_data = self._mathtex_to_svg_bytes(expr, font_size)
-#         self.svg_widget.load(svg_data)
-
-#         # Get default size and fix svg widget size to it
-#         size = self.svg_widget.renderer().defaultSize()
-#         self.svg_widget.setFixedSize(size)
-
-#     def _mathtex_to_svg_bytes(
-#         self,
-#         expr: str,
-#         font_size: int=20,
-#         x: float = 0, # left spacing
-#     ) -> bytes:
-#         # Create a matplotlib figure
-#         fig = plt.figure()
-#         fig.patch.set_alpha(0)  # Transparent Background
-
-#         # Render LaTeX     
-#         text = fig.text(
-#             x, 0,
-#             f"${expr}$",
-#             fontsize=font_size
-#         )
-#         # Draw in canvas first
-#         fig.canvas.draw()
-#         # Get the default size
-#         bbox = text.get_window_extent()
-#         # Convert pixels → inches
-#         width_in = bbox.width / fig.dpi
-#         height_in = bbox.height / fig.dpi
-#         # Resize the figure to the default size
-#         fig.set_size_inches(width_in, height_in)
-
-#         # Save to SVG in memory
-#         buffer = BytesIO()
-#         fig.savefig(buffer, format="svg", bbox_inches="tight", pad_inches=0.1) # To prevent cut of super/subscript
-#         plt.close(fig)
-
-#         buffer.seek(0)
-#         return buffer.read()
-    
-    
 # =======================================================
 # Calculation Display: pH Graph, Calculation
 # =======================================================
@@ -1570,7 +1530,6 @@ class pHGraphWidget(QWidget):
         self.graph_plot.showGrid(x=True, y=True, alpha=0.2)
         self.graph_plot.enableAutoRange(x=False, y=False)
 
-        # TODO: Allow click on points
         # self.current_point.sigClicked.connect(self._on_current_point_click)
         self.titrant_volume_manager.current_volume_changed.connect(lambda: self._draw_current_point())
     def _draw_titration_curve(self):
@@ -1640,6 +1599,7 @@ class pHGraphWidget(QWidget):
         self.current_point.clear()
         self.graph_plot.clear() # Clears all items
 
+# ScientificNotationFloat(SNF): Converts floats to mantissa and exponent
 @dataclass
 class ScientificNotationFloat():
     mantissa: float
@@ -1649,6 +1609,7 @@ class ScientificNotationFloat():
         s = f"{f:.1e}"
         mantissa, exponent = s.split('e')
         return ScientificNotationFloat(float(mantissa), int(exponent))
+SNF = ScientificNotationFloat # Alias
 
 # CalculationInfo: Displays How the Simulation Calculated with Approximating Methods
 class CalculationInfo(QWidget):
@@ -1656,116 +1617,78 @@ class CalculationInfo(QWidget):
         super().__init__()
         self.simulation_obj: Simulation = simulation_obj
         self.titrant_volume_manager: TitrantVolumeManager = titrant_volume_manager
-        # layout = QVBoxLayout(self)
-        # layout.setContentsMargins(8, 8, 8, 8)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
 
-        # self.scroll = QScrollArea()
-        # layout.addWidget(self.scroll)
-        # self.scroll.setWidgetResizable(True) # Allow resizing
+        # Calculation Info
+        self.calculation_info = QLabel("")
+        layout.addWidget(self.calculation_info)
 
-        # container = QWidget()
-        # self.scroll.setWidget(container)
-        # layout_container = QVBoxLayout(container)
-        # layout_container.setContentsMargins(0, 0, 0, 0)
+        # Shift contents all to top
+        layout.addStretch(1)
 
-        # # HA = ??, B = ??
-        # self.label_acid_base_name_info = QLabel("")
-        # layout_container.addWidget(self.label_acid_base_name_info)
-
-        # # pH = ??
-        # self.svg_pH = MathTeXSVGWidget()
-        # layout_container.addWidget(self.svg_pH)
-
-        # # [HA/A-/B/BH+/H3O+/OH-]
-        # layout_ion_conc = QVBoxLayout()
-        # layout_container.addLayout(layout_ion_conc)
-        # layout_ion_conc.setContentsMargins(0, 0, 0, 0)
-        # layout_ion_conc.setSpacing(0)
-        # self.svg_HA = MathTeXSVGWidget(); self.svg_A_ = MathTeXSVGWidget(); self.svg_H3O_plus = MathTeXSVGWidget()
-        # self.svg_B = MathTeXSVGWidget(); self.svg_BH_plus = MathTeXSVGWidget(); self.svg_OH_ = MathTeXSVGWidget()
-        # layout_ion_conc.addWidget(self.svg_HA); layout_ion_conc.addWidget(self.svg_A_)
-        # layout_ion_conc.addWidget(self.svg_B); layout_ion_conc.addWidget(self.svg_BH_plus)
-        # layout_ion_conc.addWidget(self.svg_H3O_plus); layout_ion_conc.addWidget(self.svg_OH_)
-
-        # # Shift contents all to top
-        # layout_container.addStretch(1)
-
-        # self._initialize_display()
+        self._initialize_display()
 
         # Signals
-        # self.titrant_volume_manager.current_volume_changed.connect(self._on_volume_change)
+        self.titrant_volume_manager.current_volume_changed.connect(self._on_volume_change)
 
-    # def _initialize_display(self):
-    #     self.label_acid_base_name_info.setText(f"<h2>HA : </h2><h2>B: </h2>")
-    #     self.svg_pH.load(r"pH = ")
-    #     self.svg_HA.load(r"[HA] = ")
-    #     self.svg_A_.load(r"[A^-] = ")
-    #     self.svg_B.load(r"[B] = ")
-    #     self.svg_BH_plus.load(r"[BH^+] = ")
-    #     self.svg_H3O_plus.load(r"[H_3O^+] = ")
-    #     self.svg_OH_.load(r"[OH^-] = ")
-
-    # def _on_volume_change(self):
-        # # Get all information
-        # config_data = self.simulation_obj.config_data
-        # if not config_data: return
-        # if config_data.analyte.chemical.is_acid:
-        #     HA: Chemical = config_data.analyte.chemical
-        #     a: float = config_data.analyte.concentration
-        #     Va: float = config_data.analyte.volume
-        #     B: float = config_data.titrant.chemical
-        #     b: float = config_data.titrant.concentration
-        #     Vb: float = self.simulation_obj.titrant_volume
-        # else:
-        #     B: Chemical = config_data.analyte.chemical
-        #     b: float = config_data.analyte.concentration
-        #     Vb: float = config_data.analyte.volume
-        #     HA: Chemical = config_data.titrant.chemical
-        #     a: float = config_data.titrant.concentration
-        #     Va: float = self.simulation_obj.titrant_volume
-        # Ca: float = a * Va / (Va + Vb)
-        # Cb: float = b * Vb / (Va + Vb)
-        # if not HA.is_strong: Ka: float = pow(10, -HA.pK_)
-        # if not B.is_strong: Kb: float = pow(10, -B.pK_)
-        # current_pH = self.simulation_obj.get_current_pH()
-        # cH3Oplus: float = pow(10, -current_pH)
-        # cOH_: float = 1e-14 / cH3Oplus
-        # cA_: float = Ca if HA.is_strong else Ca * Ka / (Ka + cH3Oplus)
-        # cBHplus: float = Cb if B.is_strong else Cb * Kb / (Kb + cOH_)
-        # cHA: float = Ca - cA_
-        # cB: float = Cb - cBHplus
-
+    def _initialize_display(self): self.calculation_info.setText("")
+    def _on_volume_change(self):
+        # Get all information
+        config_data = self.simulation_obj.config_data
+        if not config_data: return
+        if config_data.analyte.chemical.is_acid:
+            HA: Chemical = config_data.analyte.chemical
+            a: float = config_data.analyte.concentration
+            Va: float = config_data.analyte.volume
+            B: float = config_data.titrant.chemical
+            b: float = config_data.titrant.concentration
+            Vb: float = self.simulation_obj.titrant_volume
+        else:
+            B: Chemical = config_data.analyte.chemical
+            b: float = config_data.analyte.concentration
+            Vb: float = config_data.analyte.volume
+            HA: Chemical = config_data.titrant.chemical
+            a: float = config_data.titrant.concentration
+            Va: float = self.simulation_obj.titrant_volume
+        Ca: float = a * Va / (Va + Vb)
+        Cb: float = b * Vb / (Va + Vb)
+        if not HA.is_strong: Ka: float = pow(10, -HA.pK_)
+        if not B.is_strong: Kb: float = pow(10, -B.pK_)
+        current_pH = self.simulation_obj.get_current_pH()
+        cH3Oplus: float = pow(10, -current_pH)
+        cOH_: float = 1e-14 / cH3Oplus
+        cA_: float = Ca if HA.is_strong else Ca * Ka / (Ka + cH3Oplus)
+        cBHplus: float = Cb if B.is_strong else Cb * Kb / (Kb + cOH_)
+        cHA: float = Ca - cA_
+        cB: float = Cb - cBHplus
+        In_HIn: List[float] = [
+            pow(10, -self.simulation_obj._get_p_In_HIn(current_pH, index))
+            for index in range(len(config_data.indicators))
+        ]
 
         # Display information
-        # self.label_acid_base_name_info.setText(f"<h2>HA : {HA.name}</h2><h2>B: {B.name}</h2>")
-        # self.svg_pH.load(rf"pH = {current_pH:.2f}")
-        # snf_cHA = ScientificNotationFloat.convert(cHA)
-        # self.svg_HA.load(rf"[HA] = {snf_cHA.mantissa} \times 10^{{{snf_cHA.exponent}}}")
-        # snf_cA_ = ScientificNotationFloat.convert(cA_)
-        # self.svg_A_.load(rf"[A^-] = {snf_cA_.mantissa} \times 10^{{{snf_cA_.exponent}}}")
+        text_info = (
+            "== 적정 상황 ==<br>"
+            f"HA : {HA.name} {a:.2f}M {Va:.2f}mL<br>B : {B.name} {b:.2f}M {Vb:.2f}mL<br>"
+            f"pH = {current_pH:.2f}<br>"
+            "<br>"
+            "== 이온 농도 ==<br>"
+            f"[HA] = {SNF.convert(cHA).mantissa}×10<sup>{SNF.convert(cHA).exponent}</sup><br>"
+            f"[A<sup>-</sup>] = {SNF.convert(cA_).mantissa}×10<sup>{SNF.convert(cA_).exponent}</sup><br>"
+            f"[B] = {SNF.convert(cB).mantissa}×10<sup>{SNF.convert(cB).exponent}</sup><br>"
+            f"[BH<sup>+</sup>] = {SNF.convert(cBHplus).mantissa}×10<sup>{SNF.convert(cBHplus).exponent}</sup><br>"
+            "<br>"
+        )
+        for index, indicator in enumerate(config_data.indicators):
+            text_info = text_info + (
+                f"== 지시약 {index} ({indicator.name}) ==<br>"
+                f"[In<sup>-</sup>]/[HIn] = {SNF.convert(In_HIn[index]).mantissa}×10<sup>{SNF.convert(In_HIn[index]).mantissa}</sup><br>"
+            )
+        self.calculation_info.setText(text_info)
 
-
-        # indicator_html = "<p>"
-        # for index, indicator in enumerate(self.simulation_obj.config_data.indicators):
-        #     indicator_html = f"{indicator_html}<br>{indicator.name} : [In<sup>-</sup>]/[HIn] = {pow(10, -self.simulation_obj._get_p_In_HIn(current_pH, index)):.1e}"
-        #     pass
-        # indicator_html = f"{indicator_html}</p>"
-        # self.label_info.setText(f"""{
-        #     f"<p>HA : {HA.name} {a:.2f}M {Va:.2f}mL<br>B: {B.name} {b:.2f}M {Vb:.2f}mL</p>"
-        # }<hr>{
-        #     f"<p>pH = {current_pH:.2f}<br>[HA] = {cHA:.1e}, [A<sup>-</sup>] = {cA_:.1e}<br>[B] = {cB:.1e}, [BH<sup>+</sup>] = {cBHplus:.1e}<br>[H<sub>3</sub>O<sup>+</sup>] = {cH3Oplus:.1e}, [OH<sup>-</sup>] = {cOH_:.1e}</p>"
-        # }<hr>{indicator_html}<hr>{
-        #     "HELLO WORLD"
-        # }""") #TODO: Add Approximation in Hello World
-        # [HA], [A-], [H3O+], [B], [BH+], [OH-], [In-]/[HIn]
-        # Apporximate calculator
-        pass
-    def start_simulation(self):
-        # self._on_volume_change()
-        pass
-    def end_simulation(self):
-        # self._initialize_display()
-        pass
+    def start_simulation(self): self._on_volume_change()
+    def end_simulation(self): self._initialize_display()
 
 # Calculation Panel: Visualization into Graph and Calculations
 class CalculationsPanel(QTabWidget):
@@ -1942,8 +1865,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("중화적정 시뮬레이션 프로그램")
-        self.resize(1045, 620)
-        self.setMinimumSize(1045, 620)
+        self.resize(1060, 620)
+        self.setMinimumSize(1060, 620)
 
         # Setup simulation
         self.simulation_obj: Simulation = Simulation() # This object's reference gets passed on to children
@@ -1955,7 +1878,6 @@ class MainWindow(QMainWindow):
         self._build_ui_framework()
     def _build_ui_framework(self):
         # Build Menu Bar
-        # TODO: Add action implementations
         menubar = self.menuBar()
         # File Menu
         file_menu = menubar.addMenu("파일")
@@ -1983,7 +1905,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(15, 10, 15, 10) # Set inner padding of layout
         layout.setSpacing(10) # Set vertical gap for all inner widgets
         # Title
-        label_title = QLabel("중화적정 시뮬레이션")
+        label_title = QLabel("<h1>중화적정 시뮬레이션 프로그램</h1>")
         label_title.setAlignment(Qt.AlignCenter)
         layout.addWidget(label_title)
 
@@ -2006,9 +1928,12 @@ class MainWindow(QMainWindow):
         
         # Signals
         action_quit.triggered.connect(self.close)
+        action_about.triggered.connect(self._on_display_program_info)
         self.action_reset.triggered.connect(self.config_panel._on_reset_button_click)
         action_add_delete_chemicals.triggered.connect(self._on_manage_chemicals)
         self.config_panel.is_running_simulation_changed.connect(self._on_running_simulation_change)
+    def _on_display_program_info(self):
+        display_info(self, "<h1>중화적정 시뮬레이션 프로그램</h1>과목: 문제해결과컴퓨팅사고 SKKU 2026-1<br>팀: 지시약과 아이들")
     def _on_running_simulation_change(self, is_started: bool):
         # Activation/Deactivation of components
         if is_started: self.start_simulation()
@@ -2035,7 +1960,6 @@ class MainWindow(QMainWindow):
 # Main Entry Point
 def main():
     app = QApplication(sys.argv)
-    # app.setStyleSheet() # Load QSS stylesheet
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
